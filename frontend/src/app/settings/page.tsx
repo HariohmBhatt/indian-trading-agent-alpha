@@ -147,12 +147,19 @@ export default function SettingsPage() {
                   <td className="text-right">Rs.50-75</td>
                   <td className="text-right">3-5 min</td>
                 </tr>
-                <tr>
+                <tr className="border-b">
                   <td className="py-2">Gemini 2.0 Flash (cheapest)</td>
                   <td className="text-right">$0.10/M</td>
                   <td className="text-right">$0.40/M</td>
                   <td className="text-right font-medium text-green-600">Rs.3-5</td>
                   <td className="text-right">1-2 min</td>
+                </tr>
+                <tr>
+                  <td className="py-2 font-medium text-foreground">Ollama (local models)</td>
+                  <td className="text-right">Free</td>
+                  <td className="text-right">Free</td>
+                  <td className="text-right font-medium text-green-600">Rs.0</td>
+                  <td className="text-right">Varies (local GPU/CPU)</td>
                 </tr>
               </tbody>
             </table>

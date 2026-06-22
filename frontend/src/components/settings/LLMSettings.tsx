@@ -53,7 +53,9 @@ export function LLMSettings() {
   };
 
   const currentProvider = providers[config.llm_provider];
-  const hasKey = apiKeys[config.llm_provider]?.configured;
+  // Keyless providers (e.g. Ollama, local) expose requires_key === false.
+  const requiresKey = currentProvider?.requires_key !== false;
+  const hasKey = !requiresKey || apiKeys[config.llm_provider]?.configured;
 
   if (loading) {
     return (
@@ -81,6 +83,7 @@ export function LLMSettings() {
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
             {Object.entries(providers).map(([key, info]: any) => {
               const keyConfigured = apiKeys[key]?.configured;
+              const providerRequiresKey = info.requires_key !== false;
               const isSelected = config.llm_provider === key;
               return (
                 <button
@@ -104,7 +107,9 @@ export function LLMSettings() {
                 >
                   <div className="flex items-center justify-between">
                     <span className="font-medium text-sm">{info.name}</span>
-                    {keyConfigured ? (
+                    {!providerRequiresKey ? (
+                      <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-[10px]">Local</Badge>
+                    ) : keyConfigured ? (
                       <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 text-[10px]">Key set</Badge>
                     ) : (
                       <Badge variant="outline" className="text-[10px]">No key</Badge>
@@ -123,6 +128,14 @@ export function LLMSettings() {
             <p className="text-xs text-yellow-800">
               No API key configured for {currentProvider?.name}. Add one in the API Keys section above before running analyses.
             </p>
+          </div>
+        )}
+
+        {/* Local / keyless provider note */}
+        {!requiresKey && currentProvider?.note && (
+          <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 flex items-start gap-2">
+            <Cpu className="h-4 w-4 text-blue-700 flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-blue-800">{currentProvider.note}</p>
           </div>
         )}
 

@@ -44,6 +44,19 @@ PROVIDERS_INFO = {
         "models_deep": ["gemini-3.1-pro", "gemini-3-pro"],
         "models_quick": ["gemini-2.5-flash", "gemini-2-flash"],
     },
+    "ollama": {
+        "name": "Ollama (Local)",
+        "key_format": None,
+        # No API key — models run on the local Ollama server. The frontend
+        # uses this flag to skip the "missing key" gate for this provider.
+        "requires_key": False,
+        "signup_url": "https://ollama.com/download",
+        "note": "Runs models locally — no API key, no cost. Requires the Ollama "
+                "server running at http://localhost:11434. Pull a model first, "
+                "e.g. `ollama pull qwen3`.",
+        "models_deep": ["glm-4.7-flash:latest", "gpt-oss:latest", "qwen3:latest"],
+        "models_quick": ["qwen3:latest", "gpt-oss:latest", "glm-4.7-flash:latest"],
+    },
 }
 
 
