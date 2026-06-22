@@ -5,7 +5,6 @@ import { getConfig } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { ApiKeysManager } from "@/components/settings/ApiKeysManager";
 import { LLMSettings } from "@/components/settings/LLMSettings";
 
 export default function SettingsPage() {
@@ -63,10 +62,7 @@ export default function SettingsPage() {
         <p className="text-sm text-muted-foreground">Manage API keys, LLM provider, and view current configuration</p>
       </div>
 
-      {/* API Keys */}
-      <ApiKeysManager />
-
-      {/* LLM Provider & Models */}
+      {/* Unified Models & Keys — provider chips + inline keys + set-default */}
       <LLMSettings />
 
       <div>

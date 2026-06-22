@@ -1,5 +1,8 @@
 """Settings API — manage API keys and LLM provider config from the UI."""
 
+import json
+import urllib.request
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 from backend.settings_manager import (
@@ -79,3 +82,40 @@ def update_llm_settings(data: LLMConfigUpdate):
 def list_providers():
     """List available LLM providers with their supported models."""
     return PROVIDERS_INFO
+
+
+def _ollama_host() -> str:
+    """Base URL of the local Ollama server.
+
+    Derived from the LLM client's provider config so this admin endpoint and the
+    chat client never drift. Falls back to the documented default.
+    """
+    try:
+        from tradingagents.llm_clients.openai_client import _PROVIDER_CONFIG
+
+        base = _PROVIDER_CONFIG["ollama"][0].rstrip("/")  # e.g. http://localhost:11434/v1
+        if base.endswith("/v1"):
+            base = base[: -len("/v1")]
+        return base
+    except Exception:
+        return "http://localhost:11434"
+
+
+@router.get("/ollama/models")
+def list_ollama_models():
+    """List models installed on the local Ollama server (live, no key required).
+
+    Returns {reachable, models, count}, or {reachable: False, error} when the
+    server isn't running. Powers the Ollama model dropdowns + reachability
+    status in Settings, so the list always reflects what's actually pulled
+    locally rather than a hardcoded catalog.
+    """
+    url = f"{_ollama_host()}/api/tags"
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        models = [m.get("name") for m in payload.get("models", []) if m.get("name")]
+        return {"reachable": True, "models": models, "count": len(models)}
+    except Exception as exc:  # connection refused, timeout, malformed JSON, etc.
+        return {"reachable": False, "models": [], "error": str(exc)[:200]}
