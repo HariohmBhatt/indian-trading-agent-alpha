@@ -1,7 +1,12 @@
-"""Indian stock name-to-ticker mapping for typeahead search."""
+"""Indian stock name-to-ticker mapping — offline fallback for typeahead search.
 
-# Comprehensive NSE stock list: {ticker: company_name}
-# This covers NIFTY 50, NIFTY 100, and popular mid/small caps
+Live search now uses Yahoo Finance (see backend/routers/market_data.py, which
+is always current and needs no bundled data). This curated list (NIFTY 50/100 +
+popular mid/small caps) is only the offline fallback used when Yahoo is
+unreachable.
+"""
+
+# Curated offline fallback: {ticker: company_name}
 NSE_STOCKS = {
     "RELIANCE": "Reliance Industries Ltd",
     "TCS": "Tata Consultancy Services Ltd",

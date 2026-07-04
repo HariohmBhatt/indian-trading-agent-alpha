@@ -1,5 +1,7 @@
 """Market data endpoints — stock quotes, charts, indicators, fundamentals, news."""
 
+from functools import lru_cache
+
 from fastapi import APIRouter, Query
 import yfinance as yf
 from datetime import datetime, timedelta
@@ -8,11 +10,45 @@ from tradingagents.utils.ticker import normalize_ticker
 router = APIRouter(prefix="/api/market-data", tags=["market-data"])
 
 
+@lru_cache(maxsize=256)
+def _yahoo_nse_search(query: str) -> list:
+    """Look up NSE-listed equities by name or ticker via Yahoo's search (same
+    source as price data). Cached to limit repeated calls while typing."""
+    search = yf.Search(query, max_results=10)
+    results, seen = [], set()
+    for quote in (search.quotes or []):
+        if quote.get("quoteType") != "EQUITY":
+            continue
+        symbol = quote.get("symbol", "")
+        # NSE only (matches the app's .NS default)
+        if quote.get("exchange") != "NSI" and not symbol.endswith(".NS"):
+            continue
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        name = quote.get("longname") or quote.get("shortname") or symbol
+        ticker = symbol[:-3] if symbol.endswith(".NS") else symbol
+        results.append({"ticker": ticker, "name": name, "symbol": symbol, "score": 100})
+    return results
+
+
 @router.get("/search")
 def search_stocks(q: str = Query("", description="Search query — ticker or company name")):
-    """Search Indian stocks by ticker or company name. Typeahead endpoint."""
+    """Typeahead search via Yahoo Finance — no local stock list, always current.
+
+    Falls back to a small curated list only if the Yahoo lookup fails/offline.
+    """
+    query = q.strip()
+    if not query:
+        return []
+    try:
+        results = _yahoo_nse_search(query)
+        if results:
+            return results
+    except Exception:
+        pass
     from backend.stock_list import search_stocks as _search
-    return _search(q)
+    return _search(query)
 
 
 @router.get("/quote/{ticker}")
