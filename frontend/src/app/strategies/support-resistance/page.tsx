@@ -27,15 +27,16 @@ export default function StrategiesPage() {
   const [srData, setSrData] = useState<any>(null);
   const [pivotData, setPivotData] = useState<any>(null);
 
-  const handleCalculate = async () => {
+  const handleCalculate = async (overridePeriod?: string) => {
     if (!ticker.trim()) return;
+    const activePeriod = overridePeriod ?? period;
     setLoading(true);
     setSrData(null);
     setPivotData(null);
 
     try {
       const [sr, pivots]: any[] = await Promise.all([
-        getSupportResistance(ticker.trim(), period),
+        getSupportResistance(ticker.trim(), activePeriod),
         getPivotPoints(ticker.trim()),
       ]);
       setSrData(sr);
@@ -55,8 +56,8 @@ export default function StrategiesPage() {
       </div>
 
       {/* Input */}
-      <Card>
-        <CardContent className="p-4">
+      <Card className="overflow-visible">
+        <CardContent className="p-4 overflow-visible">
           <div className="flex gap-3 items-end">
             <div className="w-64">
               <label className="text-xs text-muted-foreground mb-1 block">Ticker Symbol</label>
@@ -72,13 +73,18 @@ export default function StrategiesPage() {
                   key={p.value}
                   variant={period === p.value ? "default" : "outline"}
                   size="sm"
-                  onClick={() => setPeriod(p.value)}
+                  disabled={loading}
+                  onClick={() => {
+                    setPeriod(p.value);
+                    // If results are already shown, refetch immediately for the new period.
+                    if (srData) handleCalculate(p.value);
+                  }}
                 >
                   {p.label}
                 </Button>
               ))}
             </div>
-            <Button onClick={handleCalculate} disabled={loading || !ticker.trim()}>
+            <Button onClick={() => handleCalculate()} disabled={loading || !ticker.trim()}>
               {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Target className="h-4 w-4 mr-2" />}
               Calculate Levels
             </Button>
@@ -91,9 +97,16 @@ export default function StrategiesPage() {
           {/* Support & Resistance */}
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-lg flex items-center justify-between">
-                Support & Resistance
-                <Badge variant="outline">{srData.period} data</Badge>
+              <CardTitle className="text-lg flex items-center justify-between gap-2">
+                <span>
+                  Support &amp; Resistance
+                  <span className="ml-2 text-sm font-normal text-muted-foreground">
+                    · over the last {periods.find((p) => p.value === srData.period)?.label || srData.period}
+                  </span>
+                </span>
+                <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30 whitespace-nowrap">
+                  {periods.find((p) => p.value === srData.period)?.label || srData.period}
+                </Badge>
               </CardTitle>
               <div className="flex items-center gap-4 text-sm">
                 <span className="text-muted-foreground">Current:</span>
@@ -191,24 +204,30 @@ export default function StrategiesPage() {
           {pivotData && !pivotData.error && (
             <Card>
               <CardHeader className="pb-3">
-                <CardTitle className="text-lg flex items-center justify-between">
-                  Daily Pivot Points
-                  <Badge variant="outline">Based on {pivotData.based_on.date}</Badge>
+                <CardTitle className="text-lg flex items-center justify-between gap-2">
+                  <span>
+                    Daily Pivot Points
+                    <span className="ml-2 text-sm font-normal text-amber-700">· Intraday (same all day)</span>
+                  </span>
+                  <Badge variant="outline" className="whitespace-nowrap">Based on {pivotData.based_on.date}</Badge>
                 </CardTitle>
                 <p className="text-xs text-muted-foreground">
                   Previous session: H ₹{pivotData.based_on.high} | L ₹{pivotData.based_on.low} | C ₹{pivotData.based_on.close}
+                </p>
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1.5">
+                  ⓘ <b>Intraday</b> levels (labelled PR/PS), computed from the last session and reset each day — they do <b>not</b> change with the 1M/3M/6M/1Y selector (that only drives the Support &amp; Resistance card).
                 </p>
               </CardHeader>
               <CardContent>
                 <div className="space-y-2">
                   {[
-                    { label: "R3", value: pivotData.pivot_points.r3, color: "bg-red-100 text-red-700 border-red-200" },
-                    { label: "R2", value: pivotData.pivot_points.r2, color: "bg-red-50 text-red-600 border-red-100" },
-                    { label: "R1", value: pivotData.pivot_points.r1, color: "bg-red-50/50 text-red-500 border-red-100/50" },
+                    { label: "PR3", value: pivotData.pivot_points.r3, color: "bg-red-100 text-red-700 border-red-200" },
+                    { label: "PR2", value: pivotData.pivot_points.r2, color: "bg-red-50 text-red-600 border-red-100" },
+                    { label: "PR1", value: pivotData.pivot_points.r1, color: "bg-red-50/50 text-red-500 border-red-100/50" },
                     { label: "PP", value: pivotData.pivot_points.pivot, color: "bg-blue-100 text-blue-700 border-blue-200" },
-                    { label: "S1", value: pivotData.pivot_points.s1, color: "bg-green-50/50 text-green-500 border-green-100/50" },
-                    { label: "S2", value: pivotData.pivot_points.s2, color: "bg-green-50 text-green-600 border-green-100" },
-                    { label: "S3", value: pivotData.pivot_points.s3, color: "bg-green-100 text-green-700 border-green-200" },
+                    { label: "PS1", value: pivotData.pivot_points.s1, color: "bg-green-50/50 text-green-500 border-green-100/50" },
+                    { label: "PS2", value: pivotData.pivot_points.s2, color: "bg-green-50 text-green-600 border-green-100" },
+                    { label: "PS3", value: pivotData.pivot_points.s3, color: "bg-green-100 text-green-700 border-green-200" },
                   ].map((item) => {
                     const diff = ((item.value - pivotData.current_price) / pivotData.current_price * 100);
                     const isCurrentNear = Math.abs(diff) < 0.5;
@@ -234,11 +253,11 @@ export default function StrategiesPage() {
                 <div className="mt-4 p-3 rounded-lg bg-muted/50 text-sm">
                   <p className="font-medium mb-1">Pivot Point Strategy:</p>
                   <ul className="space-y-1 text-muted-foreground">
-                    <li>Price above PP (₹{pivotData.pivot_points.pivot}): Bullish bias, target R1/R2</li>
-                    <li>Price below PP: Bearish bias, target S1/S2</li>
-                    <li>R1/S1: First profit target / stop-loss level</li>
-                    <li>R2/S2: Extended targets for strong trends</li>
-                    <li>R3/S3: Extreme levels — expect reversal</li>
+                    <li>Price above PP (₹{pivotData.pivot_points.pivot}): Bullish bias, target PR1/PR2</li>
+                    <li>Price below PP: Bearish bias, target PS1/PS2</li>
+                    <li>PR1/PS1: First profit target / stop-loss level</li>
+                    <li>PR2/PS2: Extended targets for strong trends</li>
+                    <li>PR3/PS3: Extreme levels — expect reversal</li>
                   </ul>
                 </div>
               </CardContent>
