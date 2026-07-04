@@ -82,8 +82,8 @@ function AnalysisPageInner() {
       </div>
 
       {/* Input Section */}
-      <Card>
-        <CardContent className="p-4">
+      <Card className="overflow-visible">
+        <CardContent className="p-4 overflow-visible">
           <div className="flex gap-3 items-end">
             <div className="flex-1">
               <label className="text-xs text-muted-foreground mb-1 block">Ticker Symbol</label>

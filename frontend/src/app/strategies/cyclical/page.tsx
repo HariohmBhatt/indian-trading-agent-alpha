@@ -330,8 +330,8 @@ export default function CyclicalPage() {
 
         {/* Stock Seasonality Tab */}
         <TabsContent value="stock" className="space-y-4">
-          <Card>
-            <CardContent className="p-4">
+          <Card className="overflow-visible">
+            <CardContent className="p-4 overflow-visible">
               <div className="flex gap-3 items-end">
                 <div className="w-64">
                   <label className="text-xs text-muted-foreground mb-1 block">Ticker Symbol</label>

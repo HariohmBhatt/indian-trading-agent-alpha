@@ -83,18 +83,18 @@ export function TickerSearch({ value, onChange, placeholder, disabled, className
         className={`font-sans ${className || ""}`}
       />
       {showDropdown && (
-        <div className="absolute z-50 w-full mt-1 bg-white border border-border rounded-lg shadow-lg max-h-60 overflow-auto">
+        <div className="absolute z-50 w-full min-w-[300px] mt-1 bg-white border border-border rounded-lg shadow-lg max-h-72 overflow-auto">
           {results.map((r) => (
             <button
               key={r.ticker}
               onClick={() => handleSelect(r.ticker)}
-              className="w-full text-left px-3 py-2 hover:bg-muted flex items-center justify-between text-sm"
+              className="w-full text-left px-3 py-2 hover:bg-muted flex items-center justify-between gap-3 text-sm"
             >
-              <div>
+              <span className="min-w-0 truncate">
                 <span className="font-sans font-semibold">{r.ticker}</span>
                 <span className="text-muted-foreground ml-2">{r.name}</span>
-              </div>
-              <span className="text-xs text-muted-foreground">{r.symbol}</span>
+              </span>
+              <span className="text-xs text-muted-foreground flex-none">{r.symbol}</span>
             </button>
           ))}
         </div>
