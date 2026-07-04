@@ -681,6 +681,16 @@ Apache License 2.0 — see [LICENSE](./LICENSE) file.
 
 This project builds on the Apache 2.0-licensed [TradingAgents](https://github.com/TauricResearch/TradingAgents) framework. See [NOTICE](./NOTICE) for attribution details.
 
+### Data Sources & Terms
+
+The code is Apache-2.0, but the **data** it accesses at runtime carries each source's own terms — review these before any **commercial** use:
+
+- **Market / price / news data — Yahoo Finance (via `yfinance`).** The library is Apache-2.0, but the underlying data is Yahoo's, intended for **personal / research use** and not licensed for commercial redistribution. For commercial use, switch to a licensed market-data vendor (or your broker's API).
+- **Ticker search — Yahoo Finance.** Stock name/ticker lookup uses Yahoo's search (via `yfinance`, the same source as prices) — always current, with **no NSE list bundled or fetched**. A small curated list is the offline fallback. Individual facts (symbols, names) are public.
+- **FII/DII data — `nsepython` (optional).** `nsepython` is **GPL-licensed** and is **not** a declared dependency; it's imported lazily and only if you install it, with a manual-entry fallback. This keeps the core project free of GPL obligations.
+- **News — RSS aggregation.** Only headlines + short summaries + links back to the source are stored; full articles are not reproduced.
+- **Charts — TradingView Lightweight Charts™** (Apache-2.0), attributed on the Charts page per its license.
+
 ---
 
 ## Acknowledgments

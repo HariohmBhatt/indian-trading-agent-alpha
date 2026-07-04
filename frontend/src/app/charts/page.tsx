@@ -187,6 +187,19 @@ export default function ChartsPage() {
         </CardContent>
       </Card>
 
+      {/* Attribution required by the TradingView Lightweight Charts license */}
+      <p className="text-xs text-muted-foreground">
+        Charts powered by{" "}
+        <a
+          href="https://www.tradingview.com/lightweight-charts/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline hover:text-foreground"
+        >
+          TradingView Lightweight Charts™
+        </a>
+      </p>
+
       {/* Help */}
       <HelpSection title="How to Read Charts" items={chartsHelp} />
     </div>

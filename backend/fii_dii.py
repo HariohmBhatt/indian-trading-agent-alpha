@@ -67,6 +67,8 @@ def fetch_from_nse() -> Optional[dict]:
         Dict with date, fii_buy/sell/net, dii_buy/sell/net — or None if failed.
     """
     try:
+        # Optional integration — nsepython is GPL-licensed and is NOT a declared
+        # dependency; imported lazily so the app never hard-requires GPL code.
         from nsepython import nse_fiidii
 
         raw = nse_fiidii()
