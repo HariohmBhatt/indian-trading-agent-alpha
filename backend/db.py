@@ -186,6 +186,18 @@ def ensure_db():
                 outcome_5d TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
             );
+
+            -- Kite equity portfolio reviews: one row for each manual review run.
+            CREATE TABLE IF NOT EXISTS equity_portfolio_reviews (
+                review_id TEXT PRIMARY KEY,
+                review_date TEXT NOT NULL,
+                holdings_json TEXT NOT NULL,
+                summary_json TEXT NOT NULL,
+                insights_json TEXT NOT NULL,
+                model_metadata_json TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
         """)
 
 
@@ -382,6 +394,65 @@ def get_all_settings() -> dict:
     with get_db() as conn:
         rows = conn.execute("SELECT key, value FROM settings").fetchall()
         return {r["key"]: r["value"] for r in rows}
+
+
+# --- Equity Portfolio Reviews ---
+
+def save_equity_portfolio_review(review: dict):
+    """Persist a Kite equity portfolio review."""
+    with get_db() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO equity_portfolio_reviews
+            (review_id, review_date, holdings_json, summary_json, insights_json, model_metadata_json, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+            (
+                review["review_id"],
+                review["review_date"],
+                json.dumps(review.get("holdings", [])),
+                json.dumps(review.get("summary", {})),
+                json.dumps(review.get("insights", {})),
+                json.dumps(review.get("model_metadata", {})),
+            ),
+        )
+
+
+def _decode_equity_portfolio_review(row: sqlite3.Row | None) -> dict | None:
+    if not row:
+        return None
+    data = dict(row)
+    data["holdings"] = json.loads(data.pop("holdings_json") or "[]")
+    data["summary"] = json.loads(data.pop("summary_json") or "{}")
+    data["insights"] = json.loads(data.pop("insights_json") or "{}")
+    data["model_metadata"] = json.loads(data.pop("model_metadata_json") or "{}")
+    return data
+
+
+def get_latest_equity_portfolio_review() -> dict | None:
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT * FROM equity_portfolio_reviews
+            ORDER BY created_at DESC, review_id DESC LIMIT 1"""
+        ).fetchone()
+        return _decode_equity_portfolio_review(row)
+
+
+def get_equity_portfolio_review(review_id: str) -> dict | None:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM equity_portfolio_reviews WHERE review_id = ?",
+            (review_id,),
+        ).fetchone()
+        return _decode_equity_portfolio_review(row)
+
+
+def list_equity_portfolio_reviews(limit: int = 30) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT * FROM equity_portfolio_reviews
+            ORDER BY created_at DESC, review_id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [_decode_equity_portfolio_review(r) for r in rows]
 
 
 # --- Paper Trades ---

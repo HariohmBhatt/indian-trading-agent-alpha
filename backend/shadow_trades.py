@@ -119,7 +119,7 @@ def record_shadow_trades_from_recommendations(recs: dict) -> dict:
 def refresh_shadow_prices() -> dict:
     """Backfill 1/3/5/10-day prices + P&L for shadow trades."""
     from backend.simulation import _price_n_days_later
-    from backend.utils.ticker import normalize_ticker
+    from tradingagents.utils.ticker import normalize_ticker
 
     with get_db() as conn:
         rows = conn.execute(

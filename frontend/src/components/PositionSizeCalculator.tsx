@@ -91,7 +91,7 @@ export function PositionSizeCalculator({ open, onClose, defaultEntry, defaultSL,
               onClick={() => setDirection("long")}
               className={`flex-1 p-2 rounded-lg border text-sm transition-colors ${
                 direction === "long"
-                  ? "border-green-500 bg-green-50 text-green-700"
+                  ? "border-green-500 bg-green-50 text-green-700 dark:bg-green-950/40 dark:text-green-300"
                   : "border-border hover:border-green-200"
               }`}
             >
@@ -102,7 +102,7 @@ export function PositionSizeCalculator({ open, onClose, defaultEntry, defaultSL,
               onClick={() => setDirection("short")}
               className={`flex-1 p-2 rounded-lg border text-sm transition-colors ${
                 direction === "short"
-                  ? "border-red-500 bg-red-50 text-red-700"
+                  ? "border-red-500 bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300"
                   : "border-border hover:border-red-200"
               }`}
             >
@@ -179,7 +179,7 @@ export function PositionSizeCalculator({ open, onClose, defaultEntry, defaultSL,
 
           {/* Results */}
           {shares > 0 && !slInvalid && (
-            <Card className="border-green-200 bg-green-50/30">
+            <Card className="border-green-200 bg-green-50/30 dark:border-green-800 dark:bg-green-950/20">
               <CardContent className="p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium">Recommended Position</span>
@@ -233,7 +233,7 @@ export function PositionSizeCalculator({ open, onClose, defaultEntry, defaultSL,
                 )}
 
                 {positionTooBig && (
-                  <div className="text-xs text-yellow-800 bg-yellow-50 border border-yellow-200 rounded p-2 flex items-start gap-1">
+                  <div className="text-xs text-yellow-800 bg-yellow-50 border border-yellow-200 dark:text-yellow-300 dark:bg-yellow-950/40 dark:border-yellow-800 rounded p-2 flex items-start gap-1">
                     <AlertTriangle className="h-3 w-3 mt-0.5 flex-shrink-0" />
                     This position is {portfolioPct.toFixed(0)}% of your portfolio. Consider a smaller position.
                   </div>

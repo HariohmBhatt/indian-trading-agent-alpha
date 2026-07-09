@@ -1,14 +1,21 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+/** Resolve backend URL from the page hostname so remote access works without a rebuild. */
+function getApiBase(): string {
+  if (typeof window !== "undefined" && window.location.hostname) {
+    return `http://${window.location.hostname}:8000`;
+  }
+  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+}
 
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
+  const apiBase = getApiBase();
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, {
+    res = await fetch(`${apiBase}${path}`, {
       ...options,
       headers: { "Content-Type": "application/json", ...options?.headers },
     });
   } catch {
-    throw new Error(`Cannot connect to backend at ${API_BASE}. Is it running?`);
+    throw new Error(`Cannot connect to backend at ${apiBase}. Is it running?`);
   }
   if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
   return res.json();
@@ -48,6 +55,22 @@ export const removeFromWatchlist = (ticker: string) =>
 
 // Config
 export const getConfig = () => fetchAPI(`/api/config`);
+
+// Kite + Equity Portfolio Analysis
+export const getKiteStatus = () => fetchAPI(`/api/kite/status`);
+export const saveKiteCredentials = (data: { api_key: string; api_secret: string }) =>
+  fetchAPI(`/api/kite/credentials`, { method: "PUT", body: JSON.stringify(data) });
+export const getKiteLoginUrl = () => fetchAPI(`/api/kite/login-url`);
+export const logoutKite = () => fetchAPI(`/api/kite/logout`, { method: "POST" });
+export const getEquityHoldings = () => fetchAPI(`/api/equity-portfolio/holdings`);
+export const runEquityPortfolioReview = () =>
+  fetchAPI(`/api/equity-portfolio/reviews`, { method: "POST" });
+export const getLatestEquityPortfolioReview = () =>
+  fetchAPI(`/api/equity-portfolio/reviews/latest`);
+export const getEquityPortfolioReviewHistory = (limit = 30) =>
+  fetchAPI(`/api/equity-portfolio/reviews?limit=${limit}`);
+export const getEquityPortfolioReview = (reviewId: string) =>
+  fetchAPI(`/api/equity-portfolio/reviews/${reviewId}`);
 
 // Settings — API Keys & LLM Config
 export const getApiKeys = () => fetchAPI(`/api/settings/api-keys`);
@@ -271,7 +294,7 @@ export const getScanResult = (scanId: string) => fetchAPI(`/api/scanner/${scanId
 export const getScannerUniverses = () => fetchAPI(`/api/scanner/universes/list`);
 
 export function connectScannerWS(scanId: string, onEvent: (event: any) => void): WebSocket {
-  const wsBase = API_BASE.replace("http", "ws");
+  const wsBase = getApiBase().replace("http", "ws");
   const ws = new WebSocket(`${wsBase}/api/scanner/ws/${scanId}`);
   ws.onmessage = (event) => {
     try { onEvent(JSON.parse(event.data)); } catch {}
@@ -295,7 +318,7 @@ export const getBacktestHistory = (limit = 20) => fetchAPI(`/api/backtest/histor
 
 // WebSocket
 export function connectAnalysisWS(taskId: string, onEvent: (event: any) => void): WebSocket {
-  const wsBase = API_BASE.replace("http", "ws");
+  const wsBase = getApiBase().replace("http", "ws");
   const ws = new WebSocket(`${wsBase}/api/analysis/ws/${taskId}`);
   ws.onmessage = (event) => {
     try {
@@ -307,7 +330,7 @@ export function connectAnalysisWS(taskId: string, onEvent: (event: any) => void)
 }
 
 export function connectBacktestWS(backtestId: string, onEvent: (event: any) => void): WebSocket {
-  const wsBase = API_BASE.replace("http", "ws");
+  const wsBase = getApiBase().replace("http", "ws");
   const ws = new WebSocket(`${wsBase}/api/backtest/ws/${backtestId}`);
   ws.onmessage = (event) => {
     try {

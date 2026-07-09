@@ -1,0 +1,21 @@
+[Unit]
+Description=Indian Trading Agent - FastAPI Backend
+Documentation=https://github.com/pradeepsiddappa/indian-trading-agent
+After=network-online.target tailscaled.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=hariohm
+Group=hariohm
+WorkingDirectory=/home/hariohm/indian-trading-agent
+Environment=PATH=/home/hariohm/indian-trading-agent/venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/hariohm/indian-trading-agent/venv/bin/uvicorn backend.app:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

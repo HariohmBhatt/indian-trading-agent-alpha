@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import {
   Home,
   Sparkles,
@@ -16,6 +17,7 @@ import {
   TrendingUp,
   Newspaper,
   Brain,
+  PieChart,
 } from "lucide-react";
 
 type NavItem = {
@@ -49,6 +51,7 @@ const navGroups: NavGroup[] = [
     title: "ANALYZE",
     items: [
       { href: "/analysis", label: "Deep Analysis", icon: Search, hint: "AI-powered (paid)" },
+      { href: "/equity-portfolio-analysis", label: "Equity portfolio analysis", icon: PieChart, hint: "Kite holdings review" },
       { href: "/charts", label: "Charts", icon: CandlestickChart, hint: "Candlestick charts" },
     ],
   },
@@ -104,7 +107,7 @@ export function Sidebar() {
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors group ${
+                    className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm group ${
                       isActive
                         ? "bg-accent text-accent-foreground font-medium"
                         : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
@@ -127,7 +130,11 @@ export function Sidebar() {
         ))}
       </nav>
 
-      <div className="p-4 border-t border-border">
+      <div className="p-4 border-t border-border space-y-3">
+        <div>
+          <p className="text-[10px] text-muted-foreground mb-1.5">Appearance</p>
+          <ThemeToggle />
+        </div>
         <div className="text-[10px] text-muted-foreground">
           <p>Powered by Claude + LangGraph</p>
           <p className="mt-0.5">Data: yfinance (NSE)</p>

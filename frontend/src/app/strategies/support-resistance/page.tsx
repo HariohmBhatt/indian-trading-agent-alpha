@@ -124,7 +124,7 @@ export default function StrategiesPage() {
                 <div className="space-y-2">
                   {srData.support_resistance.resistances.length > 0 ? (
                     srData.support_resistance.resistances.map((r: any, i: number) => (
-                      <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-red-50 border border-red-100">
+                      <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-red-50 border border-red-100 dark:bg-red-950/40 dark:border-red-800">
                         <div className="flex items-center gap-3">
                           <Badge variant="outline" className="bg-red-100 text-red-700 border-red-200">
                             R{i + 1}
@@ -163,7 +163,7 @@ export default function StrategiesPage() {
                 <div className="space-y-2">
                   {srData.support_resistance.supports.length > 0 ? (
                     srData.support_resistance.supports.map((s: any, i: number) => (
-                      <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-green-50 border border-green-100">
+                      <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-green-50 border border-green-100 dark:bg-green-950/40 dark:border-green-800">
                         <div className="flex items-center gap-3">
                           <Badge variant="outline" className="bg-green-100 text-green-700 border-green-200">
                             S{i + 1}
@@ -221,13 +221,13 @@ export default function StrategiesPage() {
               <CardContent>
                 <div className="space-y-2">
                   {[
-                    { label: "PR3", value: pivotData.pivot_points.r3, color: "bg-red-100 text-red-700 border-red-200" },
-                    { label: "PR2", value: pivotData.pivot_points.r2, color: "bg-red-50 text-red-600 border-red-100" },
-                    { label: "PR1", value: pivotData.pivot_points.r1, color: "bg-red-50/50 text-red-500 border-red-100/50" },
-                    { label: "PP", value: pivotData.pivot_points.pivot, color: "bg-blue-100 text-blue-700 border-blue-200" },
-                    { label: "PS1", value: pivotData.pivot_points.s1, color: "bg-green-50/50 text-green-500 border-green-100/50" },
-                    { label: "PS2", value: pivotData.pivot_points.s2, color: "bg-green-50 text-green-600 border-green-100" },
-                    { label: "PS3", value: pivotData.pivot_points.s3, color: "bg-green-100 text-green-700 border-green-200" },
+                    { label: "PR3", value: pivotData.pivot_points.r3, color: "bg-red-100 text-red-700 border-red-200 dark:bg-red-950/40 dark:text-red-300 dark:border-red-800" },
+                    { label: "PR2", value: pivotData.pivot_points.r2, color: "bg-red-50 text-red-600 border-red-100 dark:bg-red-950/40 dark:text-red-300 dark:border-red-800" },
+                    { label: "PR1", value: pivotData.pivot_points.r1, color: "bg-red-50/50 text-red-500 border-red-100/50 dark:bg-red-950/20 dark:text-red-400 dark:border-red-800/50" },
+                    { label: "PP", value: pivotData.pivot_points.pivot, color: "bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800" },
+                    { label: "PS1", value: pivotData.pivot_points.s1, color: "bg-green-50/50 text-green-500 border-green-100/50 dark:bg-green-950/20 dark:text-green-400 dark:border-green-800/50" },
+                    { label: "PS2", value: pivotData.pivot_points.s2, color: "bg-green-50 text-green-600 border-green-100 dark:bg-green-950/40 dark:text-green-300 dark:border-green-800" },
+                    { label: "PS3", value: pivotData.pivot_points.s3, color: "bg-green-100 text-green-700 border-green-200 dark:bg-green-950/40 dark:text-green-300 dark:border-green-800" },
                   ].map((item) => {
                     const diff = ((item.value - pivotData.current_price) / pivotData.current_price * 100);
                     const isCurrentNear = Math.abs(diff) < 0.5;
