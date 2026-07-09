@@ -8,8 +8,12 @@ import {
   getKiteLoginUrl,
   getKiteStatus,
   getLatestEquityPortfolioReview,
+  getTelegramStatus,
   logoutKite,
   runEquityPortfolioReview,
+  saveTelegramSettings,
+  sendLatestEquityPortfolioReviewTelegram,
+  sendTelegramTest,
   saveKiteCredentials,
 } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -28,6 +32,7 @@ import {
   PieChart,
   RefreshCw,
   ShieldCheck,
+  Send,
   TrendingDown,
   TrendingUp,
   Wallet,
@@ -43,6 +48,13 @@ type KiteStatus = {
     user_shortname?: string;
     user_name?: string;
   } | null;
+};
+
+type TelegramStatus = {
+  configured: boolean;
+  enabled: boolean;
+  masked_bot_token?: string | null;
+  masked_chat_id?: string | null;
 };
 
 type Holding = {
@@ -292,6 +304,7 @@ function EquityPortfolioAnalysisContent() {
   const searchParams = useSearchParams();
   const [status, setStatus] = useState<KiteStatus | null>(null);
   const [latest, setLatest] = useState<LatestReviewResponse | null>(null);
+  const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null);
   const [history, setHistory] = useState<Review[]>([]);
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [loading, setLoading] = useState(true);
@@ -299,18 +312,24 @@ function EquityPortfolioAnalysisContent() {
   const [running, setRunning] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
+  const [botToken, setBotToken] = useState("");
+  const [chatId, setChatId] = useState("");
+  const [savingTelegram, setSavingTelegram] = useState(false);
+  const [sendingTelegram, setSendingTelegram] = useState(false);
 
   const latestReview = latest?.review || null;
 
   const load = async () => {
     setLoading(true);
     try {
-      const [kiteStatus, latestReviewRes, historyRes] = await Promise.all([
+      const [kiteStatus, telegramStatusRes, latestReviewRes, historyRes] = await Promise.all([
         getKiteStatus() as Promise<KiteStatus>,
+        getTelegramStatus().catch(() => null),
         getLatestEquityPortfolioReview().catch(() => ({ found: false, review: null })),
         getEquityPortfolioReviewHistory(30).catch(() => ({ reviews: [] })),
       ]);
       setStatus(kiteStatus);
+      setTelegramStatus(telegramStatusRes as TelegramStatus | null);
       setLatest(latestReviewRes as LatestReviewResponse);
       setHistory((historyRes as ReviewHistoryResponse).reviews || []);
     } catch (e: unknown) {
@@ -387,6 +406,45 @@ function EquityPortfolioAnalysisContent() {
       toast.success("Kite session cleared");
     } catch (e: unknown) {
       toast.error(errorMessage(e, "Failed to clear Kite session"));
+    }
+  };
+
+  const saveTelegram = async () => {
+    setSavingTelegram(true);
+    try {
+      const result = await saveTelegramSettings({ bot_token: botToken, chat_id: chatId, enabled: true }) as TelegramStatus;
+      setTelegramStatus(result);
+      setBotToken("");
+      setChatId("");
+      toast.success("Telegram settings saved");
+    } catch (e: unknown) {
+      toast.error(errorMessage(e, "Failed to save Telegram settings"));
+    } finally {
+      setSavingTelegram(false);
+    }
+  };
+
+  const testTelegram = async () => {
+    setSendingTelegram(true);
+    try {
+      await sendTelegramTest("Trading Agent Telegram notifications are connected.");
+      toast.success("Telegram test sent");
+    } catch (e: unknown) {
+      toast.error(errorMessage(e, "Failed to send Telegram test"));
+    } finally {
+      setSendingTelegram(false);
+    }
+  };
+
+  const sendLatestReview = async () => {
+    setSendingTelegram(true);
+    try {
+      await sendLatestEquityPortfolioReviewTelegram();
+      toast.success("Portfolio review sent to Telegram");
+    } catch (e: unknown) {
+      toast.error(errorMessage(e, "Failed to send review to Telegram"));
+    } finally {
+      setSendingTelegram(false);
     }
   };
 
@@ -489,6 +547,65 @@ function EquityPortfolioAnalysisContent() {
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Send className="h-4 w-4" /> Telegram notifications
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium">
+                {telegramStatus?.configured ? "Telegram is configured" : "Telegram is not configured"}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {telegramStatus?.configured
+                  ? `Bot ${telegramStatus.masked_bot_token || "saved"} · Chat ${telegramStatus.masked_chat_id || "saved"}`
+                  : "Save your bot token and chat ID to send portfolio reviews."}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={testTelegram}
+                disabled={!telegramStatus?.configured || sendingTelegram}
+              >
+                {sendingTelegram ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Send className="h-3 w-3 mr-1" />}
+                Test
+              </Button>
+              <Button
+                size="sm"
+                onClick={sendLatestReview}
+                disabled={!telegramStatus?.configured || !latestReview || sendingTelegram}
+              >
+                {sendingTelegram ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Send className="h-3 w-3 mr-1" />}
+                Send Latest Review
+              </Button>
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-[1fr_1fr_auto] gap-3 max-w-4xl">
+            <Input
+              placeholder={telegramStatus?.configured ? "New bot token (optional update)" : "TELEGRAM_BOT_TOKEN"}
+              type="password"
+              value={botToken}
+              onChange={(e) => setBotToken(e.target.value)}
+            />
+            <Input
+              placeholder={telegramStatus?.configured ? "New chat ID (optional update)" : "TELEGRAM_CHAT_ID"}
+              value={chatId}
+              onChange={(e) => setChatId(e.target.value)}
+            />
+            <Button onClick={saveTelegram} disabled={savingTelegram || !botToken || !chatId}>
+              {savingTelegram ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
+              {telegramStatus?.configured ? "Update" : "Save"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       {latestReview ? (
         <>

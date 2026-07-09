@@ -9,6 +9,15 @@ from backend.db import (
     list_equity_portfolio_reviews,
 )
 from backend.equity_portfolio import create_and_save_review
+from backend.notifications.telegram import (
+    TelegramConfigError,
+    TelegramSendError,
+    build_kite_login_reminder,
+    build_portfolio_review_message,
+    get_app_url,
+    portfolio_keyboard,
+    send_html_message_with_optional_buttons,
+)
 
 
 router = APIRouter(prefix="/api/equity-portfolio", tags=["equity-portfolio"])
@@ -20,6 +29,14 @@ def _kite_error(exc: Exception) -> HTTPException:
     if isinstance(exc, KiteConfigError):
         return HTTPException(status_code=400, detail=str(exc))
     return HTTPException(status_code=502, detail=str(exc))
+
+
+def _notification_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, TelegramConfigError):
+        return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, TelegramSendError):
+        return HTTPException(status_code=502, detail=str(exc))
+    return HTTPException(status_code=500, detail=str(exc))
 
 
 @router.get("/holdings")
@@ -52,6 +69,57 @@ def review_history(limit: int = Query(30, ge=1, le=100)):
     return {"reviews": reviews, "count": len(reviews)}
 
 
+def _send_review(review: dict):
+    if not review:
+        raise HTTPException(status_code=404, detail="Review not found")
+    review_id = review.get("review_id")
+    try:
+        text = build_portfolio_review_message(
+            review,
+            app_url=get_app_url(),
+        )
+        result = send_html_message_with_optional_buttons(text, reply_markup=portfolio_keyboard())
+        return {
+            "status": "sent",
+            "review_id": review_id,
+            "message_id": result.get("result", {}).get("message_id"),
+        }
+    except Exception as exc:
+        raise _notification_error(exc)
+
+
+@router.post("/reviews/latest/send-telegram")
+def send_latest_review_to_telegram():
+    review = get_latest_equity_portfolio_review()
+    if not review:
+        raise HTTPException(status_code=404, detail="No review found")
+    return _send_review(review)
+
+
+@router.post("/reviews/run-and-send-telegram")
+def run_review_and_send_telegram():
+    try:
+        holdings_data = fetch_equity_holdings()
+        review = create_and_save_review(holdings_data, enrich=True)
+        sent = _send_review(review)
+        return {"status": "review_sent", "review": review, "telegram": sent}
+    except (KiteConfigError, KiteAuthExpired) as exc:
+        try:
+            result = send_html_message_with_optional_buttons(
+                build_kite_login_reminder(),
+                reply_markup=portfolio_keyboard(),
+            )
+            return {
+                "status": "kite_login_required",
+                "message": str(exc),
+                "telegram": {"status": "sent", "message_id": result.get("result", {}).get("message_id")},
+            }
+        except Exception as notify_exc:
+            raise _notification_error(notify_exc)
+    except Exception as exc:
+        raise _kite_error(exc)
+
+
 @router.get("/reviews/{review_id}")
 def review_detail(review_id: str):
     review = get_equity_portfolio_review(review_id)
@@ -59,3 +127,10 @@ def review_detail(review_id: str):
         raise HTTPException(status_code=404, detail="Review not found")
     return review
 
+
+@router.post("/reviews/{review_id}/send-telegram")
+def send_review_to_telegram(review_id: str):
+    review = get_equity_portfolio_review(review_id)
+    if not review:
+        raise HTTPException(status_code=404, detail="Review not found")
+    return _send_review(review)

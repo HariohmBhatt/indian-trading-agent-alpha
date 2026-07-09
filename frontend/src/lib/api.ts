@@ -71,6 +71,16 @@ export const getEquityPortfolioReviewHistory = (limit = 30) =>
   fetchAPI(`/api/equity-portfolio/reviews?limit=${limit}`);
 export const getEquityPortfolioReview = (reviewId: string) =>
   fetchAPI(`/api/equity-portfolio/reviews/${reviewId}`);
+export const sendLatestEquityPortfolioReviewTelegram = () =>
+  fetchAPI(`/api/equity-portfolio/reviews/latest/send-telegram`, { method: "POST" });
+export const sendEquityPortfolioReviewTelegram = (reviewId: string) =>
+  fetchAPI(`/api/equity-portfolio/reviews/${reviewId}/send-telegram`, { method: "POST" });
+export const getTelegramStatus = () => fetchAPI(`/api/telegram/status`);
+export const saveTelegramSettings = (data: { bot_token: string; chat_id: string; enabled?: boolean }) =>
+  fetchAPI(`/api/telegram/settings`, { method: "PUT", body: JSON.stringify(data) });
+export const deleteTelegramSettings = () => fetchAPI(`/api/telegram/settings`, { method: "DELETE" });
+export const sendTelegramTest = (text?: string) =>
+  fetchAPI(`/api/telegram/test`, { method: "POST", body: JSON.stringify({ text: text || null }) });
 
 // Settings — API Keys & LLM Config
 export const getApiKeys = () => fetchAPI(`/api/settings/api-keys`);
