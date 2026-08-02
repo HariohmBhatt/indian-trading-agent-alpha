@@ -6,6 +6,13 @@ from datetime import datetime, timedelta
 from typing import Optional
 from tradingagents.utils.ticker import normalize_ticker
 from tradingagents.utils.market_calendar import is_trading_day, next_trading_day
+from backend.execution import (
+    MAX_BACKTEST_DATES,
+    YFINANCE_TIMEOUT_SECONDS,
+    ExecutionTimeout,
+    InputLimitExceeded,
+    check_deadline,
+)
 
 
 def get_trading_dates(start_date: str, end_date: str, interval_days: int = 5) -> list[str]:
@@ -43,7 +50,11 @@ def get_price_on_date(ticker: str, date_str: str) -> Optional[float]:
     end = (dt + timedelta(days=1)).strftime("%Y-%m-%d")
 
     t = yf.Ticker(symbol)
-    hist = t.history(start=start, end=end)
+    hist = t.history(
+        start=start,
+        end=end,
+        timeout=YFINANCE_TIMEOUT_SECONDS,
+    )
 
     if hist.empty:
         return None
@@ -118,6 +129,7 @@ def run_backtest(
     config: dict,
     on_trade_complete=None,
     on_status=None,
+    deadline: float | None = None,
 ):
     """Run the full backtest loop.
 
@@ -134,6 +146,10 @@ def run_backtest(
     Returns:
         Dict with summary stats and list of trades
     """
+    dates = list(dates)
+    if len(dates) > MAX_BACKTEST_DATES:
+        raise InputLimitExceeded("backtest dates", len(dates), MAX_BACKTEST_DATES)
+
     from tradingagents.graph.trading_graph import TradingAgentsGraph
 
     if on_status:
@@ -152,6 +168,7 @@ def run_backtest(
     losing = 0
 
     for i, date in enumerate(dates):
+        check_deadline(deadline, workload="backtest")
         trade_start = time.time()
 
         if on_status:
@@ -224,6 +241,8 @@ def run_backtest(
                     if on_status:
                         on_status(f"  Reflection failed: {e}")
 
+        except ExecutionTimeout:
+            raise
         except Exception as e:
             if on_status:
                 on_status(f"  Error on {date}: {e}")

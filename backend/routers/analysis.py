@@ -3,14 +3,25 @@
 import asyncio
 import uuid
 import time
-import threading
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, BackgroundTasks
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from backend.models import AnalysisRequest, AnalysisResponse
 from backend.ws import manager
 from backend.db import save_analysis, get_analysis, get_analysis_history, update_analysis_pnl
 from pydantic import BaseModel as PydanticBaseModel
 from tradingagents.utils.ticker import normalize_ticker
 from tradingagents.default_config import DEFAULT_CONFIG
+from backend.execution import (
+    ANALYSIS_JOB_TIMEOUT_SECONDS,
+    LLM_TIMEOUT_SECONDS,
+    MAX_ANALYSIS_ANALYSTS,
+    MAX_ANALYSIS_DEBATE_ROUNDS,
+    MAX_ANALYSIS_RISK_ROUNDS,
+    ExecutionRejected,
+    check_deadline,
+    deadline_after,
+    submit_job,
+)
+from backend.observability import log_job_failure, log_job_rejected
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 
@@ -18,7 +29,14 @@ router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 _tasks: dict[str, dict] = {}
 
 
-def _run_analysis_sync(task_id: str, ticker: str, trade_date: str, config: dict, selected_analysts: list[str] = None):
+def _run_analysis_sync(
+    task_id: str,
+    ticker: str,
+    trade_date: str,
+    config: dict,
+    selected_analysts: list[str] = None,
+    deadline: float | None = None,
+):
     """Run the trading agent analysis in a background thread."""
     import asyncio
     from tradingagents.graph.trading_graph import TradingAgentsGraph
@@ -27,6 +45,8 @@ def _run_analysis_sync(task_id: str, ticker: str, trade_date: str, config: dict,
 
     if selected_analysts is None:
         selected_analysts = ["market", "social", "news", "fundamentals"]
+    selected_analysts = list(dict.fromkeys(selected_analysts))[:MAX_ANALYSIS_ANALYSTS]
+    deadline = deadline or deadline_after(ANALYSIS_JOB_TIMEOUT_SECONDS)
 
     loop = asyncio.new_event_loop()
 
@@ -51,6 +71,7 @@ def _run_analysis_sync(task_id: str, ticker: str, trade_date: str, config: dict,
         chunk_count = 0
 
         for chunk in ta.graph.stream(init_state, **stream_args):
+            check_deadline(deadline, workload="analysis", job_id=task_id)
             chunk_count += 1
             # Heartbeat — let frontend know we're still alive
             last_message = ""
@@ -122,6 +143,7 @@ def _run_analysis_sync(task_id: str, ticker: str, trade_date: str, config: dict,
 
         # Get final state
         final_state = chunk  # Last chunk is the final state
+        check_deadline(deadline, workload="analysis", job_id=task_id)
         signal = ta.process_signal(final_state.get("final_trade_decision", ""))
 
         duration = time.time() - start_time
@@ -171,8 +193,16 @@ def _run_analysis_sync(task_id: str, ticker: str, trade_date: str, config: dict,
     except Exception as e:
         _tasks[task_id]["status"] = "error"
         _tasks[task_id]["error"] = str(e)
+        log_job_failure(
+            "analysis",
+            job_id=task_id,
+            error=e,
+            metadata={"ticker": ticker, "trade_date": trade_date},
+        )
         loop.run_until_complete(manager.send_event(task_id, {
-            "type": "error", "message": str(e),
+            "type": "error",
+            "message": str(e),
+            "failure_type": type(e).__name__,
         }))
     finally:
         loop.close()
@@ -185,9 +215,13 @@ def run_analysis(req: AnalysisRequest):
     ticker = normalize_ticker(req.ticker)
 
     config = DEFAULT_CONFIG.copy()
-    config["max_debate_rounds"] = req.max_debate_rounds
-    config["max_risk_discuss_rounds"] = req.max_risk_discuss_rounds
+    config["max_debate_rounds"] = min(req.max_debate_rounds, MAX_ANALYSIS_DEBATE_ROUNDS)
+    config["max_risk_discuss_rounds"] = min(
+        req.max_risk_discuss_rounds,
+        MAX_ANALYSIS_RISK_ROUNDS,
+    )
     config["output_language"] = req.output_language
+    config["llm_timeout_seconds"] = LLM_TIMEOUT_SECONDS
 
     _tasks[task_id] = {
         "status": "pending",
@@ -196,12 +230,32 @@ def run_analysis(req: AnalysisRequest):
         "analysts": req.analysts,
     }
 
-    thread = threading.Thread(
-        target=_run_analysis_sync,
-        args=(task_id, ticker, req.trade_date, config, req.analysts),
-        daemon=True,
-    )
-    thread.start()
+    try:
+        submit_job(
+            "analysis",
+            _run_analysis_sync,
+            task_id,
+            ticker,
+            req.trade_date,
+            config,
+            req.analysts,
+            deadline_after(ANALYSIS_JOB_TIMEOUT_SECONDS),
+            job_id=task_id,
+            metadata={"ticker": ticker, "trade_date": req.trade_date},
+        )
+    except ExecutionRejected as exc:
+        _tasks[task_id]["status"] = "rejected"
+        _tasks[task_id]["error"] = str(exc)
+        log_job_rejected(
+            "analysis",
+            job_id=task_id,
+            reason=str(exc),
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="Analysis capacity is currently full; retry later.",
+            headers={"Retry-After": "30"},
+        ) from exc
 
     return AnalysisResponse(
         task_id=task_id,
@@ -323,6 +377,8 @@ def _reflect_on_analysis(analysis: dict, pnl_amount: float) -> dict:
         quick_client = create_llm_client(
             provider=DEFAULT_CONFIG["llm_provider"],
             model=DEFAULT_CONFIG["quick_think_llm"],
+            timeout=LLM_TIMEOUT_SECONDS,
+            max_retries=1,
         )
         quick_llm = quick_client.get_llm()
 

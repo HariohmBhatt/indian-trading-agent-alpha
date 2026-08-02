@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from backend import db
+from backend.observability import RequestObservabilityMiddleware
 from backend.routers import market_data, analysis, watchlist, backtest, strategies, scanner, performance, recommender, settings as settings_router, news as news_router, simulation as simulation_router, insights as insights_router, fii_dii as fii_dii_router, calendar as calendar_router, concentration as concentration_router, daily_verdict as daily_verdict_router, signal_performance as signal_performance_router, verdict_calibration as verdict_calibration_router, regime as regime_router, confidence_calibration as confidence_calibration_router, shadow_trades as shadow_trades_router, memory as memory_router, kite as kite_router, equity_portfolio as equity_portfolio_router, telegram as telegram_router, positions as positions_router
 from backend.settings_manager import load_api_keys_into_env, apply_llm_config_to_default
 
@@ -53,6 +54,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestObservabilityMiddleware)
 
 app.include_router(market_data.router)
 app.include_router(analysis.router)

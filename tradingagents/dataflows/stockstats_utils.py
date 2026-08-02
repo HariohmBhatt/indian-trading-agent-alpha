@@ -76,6 +76,7 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
             multi_level_index=False,
             progress=False,
             auto_adjust=True,
+            timeout=config.get("yfinance_timeout_seconds", 15),
         ))
         data = data.reset_index()
         data.to_csv(data_file, index=False)

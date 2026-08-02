@@ -11,8 +11,16 @@ All analysis is FREE — no AI API calls, pure price math from yfinance.
 import yfinance as yf
 import numpy as np
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from backend.scanner import NIFTY_50, NIFTY_100, BSE_250
+from backend.execution import (
+    MAX_PERFORMANCE_LOOKBACK_DAYS,
+    MAX_PERFORMANCE_STOCKS,
+    YFINANCE_TIMEOUT_SECONDS,
+    ExecutionRejected,
+    bounded_items,
+    get_executor,
+)
 
 
 UNIVERSES = {
@@ -24,10 +32,14 @@ UNIVERSES = {
 
 def _fetch_history(ticker: str, days: int = 90):
     """Fetch OHLCV history for a stock."""
+    days = max(1, min(int(days), MAX_PERFORMANCE_LOOKBACK_DAYS + 60))
     try:
         symbol = f"{ticker}.NS"
         t = yf.Ticker(symbol)
-        hist = t.history(period=f"{days}d")
+        hist = t.history(
+            period=f"{days}d",
+            timeout=YFINANCE_TIMEOUT_SECONDS,
+        )
         if hist.empty or len(hist) < 30:
             return None
         return {"ticker": ticker, "symbol": symbol, "hist": hist}
@@ -51,6 +63,39 @@ def _get_exit_price(hist, signal_idx: int, hold_days: int) -> float | None:
     return float(hist.iloc[exit_idx]["Close"])
 
 
+def _bounded_stocks(universe: str) -> list[str]:
+    return bounded_items(UNIVERSES.get(universe, NIFTY_50), MAX_PERFORMANCE_STOCKS)
+
+
+def _bounded_lookback(days: int) -> int:
+    return max(1, min(int(days), MAX_PERFORMANCE_LOOKBACK_DAYS))
+
+
+def _bounded_hold_days(hold_days: list[int]) -> list[int]:
+    values = sorted({int(days) for days in hold_days if 1 <= int(days) <= 10})
+    return values or [1]
+
+
+def _run_stock_analyses(stocks: list[str], analyze_stock) -> list[dict]:
+    """Run per-stock calculations through the shared bounded worker pool."""
+    all_trades: list[dict] = []
+    executor = get_executor("performance-worker")
+    futures = {}
+    for ticker in stocks:
+        try:
+            futures[executor.submit(analyze_stock, ticker)] = ticker
+        except ExecutionRejected:
+            continue
+    for future in as_completed(futures):
+        try:
+            result = future.result()
+        except Exception:
+            result = []
+        if result:
+            all_trades.extend(result)
+    return all_trades
+
+
 def measure_gap_strategy(
     universe: str = "nifty50",
     lookback_days: int = 60,
@@ -62,8 +107,9 @@ def measure_gap_strategy(
     Strategy: If a stock gaps up >threshold%, was the next day/3 days/5 days positive?
     Direction: Gap Up = long, Gap Down = short
     """
-    stocks = UNIVERSES.get(universe, NIFTY_50)
-    all_trades = []
+    stocks = _bounded_stocks(universe)
+    lookback_days = _bounded_lookback(lookback_days)
+    hold_days = _bounded_hold_days(hold_days)
 
     def _analyze_stock(ticker):
         data = _fetch_history(ticker, days=lookback_days + 20)
@@ -101,10 +147,7 @@ def measure_gap_strategy(
                 })
         return trades
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(_analyze_stock, t) for t in stocks]
-        for f in as_completed(futures):
-            all_trades.extend(f.result())
+    all_trades = _run_stock_analyses(stocks, _analyze_stock)
 
     return _summarize_trades(all_trades, hold_days, "Gap Up/Down Strategy")
 
@@ -120,8 +163,9 @@ def measure_volume_strategy(
     Strategy: If a stock has volume >2x avg AND price went up, was the next day/3/5 positive?
     Bullish volume spike = long, Bearish = short
     """
-    stocks = UNIVERSES.get(universe, NIFTY_50)
-    all_trades = []
+    stocks = _bounded_stocks(universe)
+    lookback_days = _bounded_lookback(lookback_days)
+    hold_days = _bounded_hold_days(hold_days)
 
     def _analyze_stock(ticker):
         data = _fetch_history(ticker, days=lookback_days + 30)
@@ -168,10 +212,7 @@ def measure_volume_strategy(
                 })
         return trades
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(_analyze_stock, t) for t in stocks]
-        for f in as_completed(futures):
-            all_trades.extend(f.result())
+    all_trades = _run_stock_analyses(stocks, _analyze_stock)
 
     return _summarize_trades(all_trades, hold_days, "Volume Spike Strategy")
 
@@ -187,8 +228,10 @@ def measure_breakout_strategy(
 
     Strategy: If a stock breaks above N-day high, was the next day/3/5 positive?
     """
-    stocks = UNIVERSES.get(universe, NIFTY_50)
-    all_trades = []
+    stocks = _bounded_stocks(universe)
+    lookback_days = _bounded_lookback(lookback_days)
+    breakout_window = max(1, min(int(breakout_window), lookback_days))
+    hold_days = _bounded_hold_days(hold_days)
 
     def _analyze_stock(ticker):
         data = _fetch_history(ticker, days=lookback_days + breakout_window + 20)
@@ -236,10 +279,7 @@ def measure_breakout_strategy(
                 })
         return trades
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(_analyze_stock, t) for t in stocks]
-        for f in as_completed(futures):
-            all_trades.extend(f.result())
+    all_trades = _run_stock_analyses(stocks, _analyze_stock)
 
     return _summarize_trades(all_trades, hold_days, "Breakout Strategy")
 
@@ -255,8 +295,9 @@ def measure_sr_bounce_strategy(
     Strategy: If a stock tests a recent low (within 1%) and bounces (green candle next day),
     does it continue to rise?
     """
-    stocks = UNIVERSES.get(universe, NIFTY_50)
-    all_trades = []
+    stocks = _bounded_stocks(universe)
+    lookback_days = _bounded_lookback(lookback_days)
+    hold_days = _bounded_hold_days(hold_days)
 
     def _analyze_stock(ticker):
         data = _fetch_history(ticker, days=lookback_days + 30)
@@ -301,10 +342,7 @@ def measure_sr_bounce_strategy(
                 })
         return trades
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(_analyze_stock, t) for t in stocks]
-        for f in as_completed(futures):
-            all_trades.extend(f.result())
+    all_trades = _run_stock_analyses(stocks, _analyze_stock)
 
     return _summarize_trades(all_trades, hold_days, "Support Bounce Strategy")
 
@@ -367,6 +405,8 @@ def measure_all_strategies(
     hold_days: list[int] = [1, 3, 5],
 ) -> dict:
     """Run performance measurement for all strategies."""
+    lookback_days = _bounded_lookback(lookback_days)
+    hold_days = _bounded_hold_days(hold_days)
     results = {}
 
     results["gap"] = measure_gap_strategy(universe, lookback_days, hold_days=hold_days)
