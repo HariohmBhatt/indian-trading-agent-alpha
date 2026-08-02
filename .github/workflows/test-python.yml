@@ -21,8 +21,6 @@ jobs:
     name: Python tests
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    env:
-      TRADINGAGENTS_HOME: ${{ runner.temp }}/indian-trading-agent
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -38,4 +36,6 @@ jobs:
         run: python -m pip install --disable-pip-version-check --no-input -e .
 
       - name: Run Python tests
-        run: python -m unittest discover -s tests -p 'test_*.py' -v
+        run: |
+          TRADINGAGENTS_HOME="$(mktemp -d)" \
+            python -m unittest discover -s tests -p 'test_*.py' -v
