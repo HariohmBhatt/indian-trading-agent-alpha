@@ -7,6 +7,7 @@ import {
   getKiteLoginUrl,
   getKiteStatus,
   getLatestEquityPortfolioReview,
+  getPositions,
   getTelegramStatus,
   logoutKite,
   runEquityPortfolioReview,
@@ -15,7 +16,7 @@ import {
   sendTelegramTest,
   saveKiteCredentials,
 } from "@/lib/api";
-import { PositionsPanel } from "@/components/portfolio/PositionsPanel";
+import { PositionsPanel, type PositionsView } from "@/components/portfolio/PositionsPanel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -69,6 +70,7 @@ type Holding = {
   allocation_pct?: number;
   action?: string;
   reasons?: string[];
+  source?: string;
 };
 
 type SectorAllocation = {
@@ -300,6 +302,7 @@ function EquityPortfolioAnalysisContent() {
   const [latest, setLatest] = useState<LatestReviewResponse | null>(null);
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null);
   const [history, setHistory] = useState<Review[]>([]);
+  const [positionsView, setPositionsView] = useState<PositionsView | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
@@ -321,10 +324,12 @@ function EquityPortfolioAnalysisContent() {
         getLatestEquityPortfolioReview().catch(() => ({ found: false, review: null })),
         getEquityPortfolioReviewHistory(30).catch(() => ({ reviews: [] })),
       ]);
+      const positionsRes = await getPositions().catch(() => null);
       setStatus(kiteStatus);
       setTelegramStatus(telegramStatusRes as TelegramStatus | null);
       setLatest(latestReviewRes as LatestReviewResponse);
       setHistory((historyRes as ReviewHistoryResponse).reviews || []);
+      setPositionsView(positionsRes as PositionsView | null);
     } catch (e: unknown) {
       toast.error(errorMessage(e, "Failed to load equity portfolio analysis"));
     } finally {
@@ -434,6 +439,9 @@ function EquityPortfolioAnalysisContent() {
   }, [latestReview]);
   const topWinners = latestReview?.summary?.top_winners || [];
   const topLosers = latestReview?.summary?.top_losers || [];
+  const reviewAvailable = positionsView?.can_review ?? !!status?.connected_today;
+  const latestReviewManualOnly = !!latestReview?.holdings?.length
+    && latestReview.holdings.every((holding) => holding.source === "manual");
 
   if (loading) {
     return (
@@ -456,16 +464,16 @@ function EquityPortfolioAnalysisContent() {
           <p className="text-sm text-muted-foreground">Read-only Kite holdings review with stored daily insights</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {reviewAvailable && (
+            <Button size="sm" onClick={runReview} disabled={running || !reviewAvailable}>
+              {running ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <ShieldCheck className="h-3 w-3 mr-1" />}
+              Run Review
+            </Button>
+          )}
           {status?.connected_today && (
-            <>
-              <Button size="sm" onClick={runReview} disabled={running}>
-                {running ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <ShieldCheck className="h-3 w-3 mr-1" />}
-                Run Review
-              </Button>
               <Button variant="ghost" size="sm" onClick={disconnect}>
                 <LogOut className="h-3 w-3 mr-1" /> Clear Session
               </Button>
-            </>
           )}
         </div>
       </div>
@@ -525,7 +533,7 @@ function EquityPortfolioAnalysisContent() {
         </Card>
       )}
 
-      <PositionsPanel kiteConnected={!!status?.connected_today} />
+      <PositionsPanel kiteConnected={!!status?.connected_today} onViewChange={setPositionsView} />
 
       <Card>
         <CardHeader>
@@ -558,12 +566,22 @@ function EquityPortfolioAnalysisContent() {
               <Button
                 size="sm"
                 onClick={sendLatestReview}
-                disabled={!telegramStatus?.configured || !latestReview || sendingTelegram}
+                disabled={
+                  !telegramStatus?.configured
+                  || !latestReview
+                  || sendingTelegram
+                  || (!!positionsView && !positionsView.can_review && !latestReviewManualOnly)
+                }
               >
                 {sendingTelegram ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Send className="h-3 w-3 mr-1" />}
                 Send Latest Review
               </Button>
             </div>
+            {positionsView?.is_stale && !positionsView.manual_only && !latestReviewManualOnly && (
+              <p className="text-xs text-yellow-700 dark:text-yellow-300">
+                Telegram portfolio reports are disabled while Kite-backed data is stale or failed.
+              </p>
+            )}
           </div>
 
           <div className="grid md:grid-cols-[1fr_1fr_auto] gap-3 max-w-4xl">
@@ -588,6 +606,19 @@ function EquityPortfolioAnalysisContent() {
 
       {latestReview ? (
         <>
+          {positionsView?.is_stale && !positionsView.manual_only && !latestReviewManualOnly && (
+            <Card className="border-yellow-300 bg-yellow-50/50 dark:border-yellow-800 dark:bg-yellow-950/20">
+              <CardContent className="p-4 flex items-start gap-3">
+                <AlertTriangle className="h-4 w-4 mt-0.5 text-yellow-700 dark:text-yellow-300" />
+                <div>
+                  <p className="font-medium">Latest Kite-backed review needs fresh data</p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Review creation and Telegram delivery are paused until the stored Kite holdings are successfully synced.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
           <SummaryCards review={latestReview} />
           <Card>
             <CardContent className="p-4">
@@ -675,10 +706,10 @@ function EquityPortfolioAnalysisContent() {
             <PieChart className="h-8 w-8 mx-auto text-muted-foreground mb-3" />
             <p className="font-medium">No equity portfolio review saved yet</p>
             <p className="text-sm text-muted-foreground mt-1">
-              Connect Kite for today, then run your first holdings review.
+              Add a manual-only position or connect Kite for today, then run your first holdings review.
             </p>
-            {status?.connected_today && (
-              <Button className="mt-4" onClick={runReview} disabled={running}>
+            {reviewAvailable && (
+              <Button className="mt-4" onClick={runReview} disabled={running || !reviewAvailable}>
                 {running ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : null}
                 Run Review
               </Button>
