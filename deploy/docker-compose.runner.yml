@@ -4,7 +4,7 @@ services:
   runner:
     build:
       context: runner
-    image: indian-trading-agent-github-runner:latest
+    image: indian-trading-agent-github-runner:local
     env_file:
       - ${TRADING_AGENT_RUNNER_ENV_FILE:?Set TRADING_AGENT_RUNNER_ENV_FILE to deploy/runner.env}
     environment:

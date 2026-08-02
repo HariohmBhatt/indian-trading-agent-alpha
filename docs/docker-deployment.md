@@ -14,10 +14,9 @@ The repository has two isolated Docker Compose projects:
 - `deploy/docker-compose.prod.yml` — production behind the Cloudflare Tunnel at `https://trade.hariohm.in`
 
 Both projects build the same source with different Docker targets. Development
-bind-mounts source code and runs Next.js/FastAPI reloaders. Production builds
-locally from the checked-out source, uses separate persistent data, and sets
-`restart: unless-stopped`. The production Compose file does not pin image
-digests or provide an automatic rollback.
+bind-mounts source code and runs Next.js/FastAPI reloaders. Production consumes
+digest-qualified application images from GHCR, uses a pinned Cloudflare
+connector, keeps separate persistent data, and uses `restart: unless-stopped`.
 
 ## Local development
 
@@ -94,9 +93,13 @@ Then deploy manually:
 ```bash
 TRADING_AGENT_EXPECTED_REF=refs/heads/prod \
 TRADING_AGENT_EXPECTED_SHA="$(git rev-parse HEAD)" \
+TRADING_AGENT_PROD_BACKEND_IMAGE='ghcr.io/OWNER/REPOSITORY/backend@sha256:DIGEST' \
+TRADING_AGENT_PROD_FRONTEND_IMAGE='ghcr.io/OWNER/REPOSITORY/frontend@sha256:DIGEST' \
 ./deploy/deploy.sh
 ```
 
+Both application references must include the full 64-character manifest digest.
+The deployment script rejects mutable image tags before it pulls anything.
 The deploy script validates that the checked-out commit is on `prod`, checks
 Docker/Compose and every host path referenced by `compose.env`, validates
 `docker compose config`, and holds `deploy.lock` for the complete operation.
@@ -137,10 +140,10 @@ restore before relying on it.
 
 ## GitHub Actions deployment
 
-The workflow `.github/workflows/deploy-prod.yml` runs on every push to the
-`prod` branch. It uses a repository-level self-hosted runner on `dellg15`, so
-the build and deployment happen on the local machine. Nothing is deployed to
-GitHub-hosted infrastructure.
+The workflow `.github/workflows/deploy-prod.yml` validates pull requests without
+pushing images. On every push to the `prod` branch it builds the backend and
+frontend once on a GitHub-hosted runner, publishes them to GHCR, and passes their
+immutable digests to the repository-level self-hosted runner on `dellg15`.
 
 The runner itself is Dockerized and mounts the raw host Docker socket. That
 socket gives jobs effectively root-level control of the host; it is not
@@ -196,13 +199,13 @@ git merge --ff-only main
 git push origin prod
 ```
 
-GitHub Actions checks out that exact commit on `dellg15`, runs
-`./deploy/deploy.sh` with the event's `prod` ref and SHA, builds the production
-images locally, replaces the containers, and verifies both health endpoints.
-Manual and runner deployments share the host-visible `deploy.lock`, so only
-one production replacement can run at a time. A failed health check fails the
-workflow and prints recent container logs, so the deployment can be diagnosed.
-Compose does not automatically restore the previous release.
+GitHub Actions builds and publishes the application images once, then checks out
+that exact commit on `dellg15`, runs `./deploy/deploy.sh` with the two
+digest-qualified GHCR references, replaces the containers without rebuilding,
+and verifies both health endpoints. Manual and runner deployments share the
+host-visible `deploy.lock`, so only one production replacement can run at a
+time. A failed health check fails the workflow and prints recent container logs,
+so the deployment can be diagnosed before retrying.
 
 For rollback, use a forward revert/restore commit on `prod`; do not force-push:
 

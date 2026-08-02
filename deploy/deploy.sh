@@ -238,11 +238,32 @@ validate_compose_config() {
   ok "Docker Compose configuration is valid."
 }
 
+validate_immutable_images() {
+  local image
+  local images
+
+  images="$(compose config --images)"
+  if [[ -z "$images" ]]; then
+    err "Production Compose configuration contains no images."
+    return 1
+  fi
+
+  while IFS= read -r image; do
+    if [[ ! "$image" =~ @sha256:[0-9a-f]{64}$ ]]; then
+      err "Production image is not digest-qualified: $image"
+      return 1
+    fi
+  done <<< "$images"
+
+  ok "Validated immutable production image references."
+}
+
 validate_preflight() {
   validate_compose_env_file || return 1
   validate_docker || return 1
   validate_referenced_paths || return 1
   validate_compose_config || return 1
+  validate_immutable_images || return 1
 }
 
 validate_revision() {
@@ -344,8 +365,11 @@ release_deployment_lock() {
 }
 
 deploy_stack() {
-  log "Building and starting the production Docker stack..."
-  compose up -d --build --remove-orphans
+  log "Pulling the immutable production Docker stack..."
+  compose pull
+
+  log "Starting the production Docker stack..."
+  compose up -d --remove-orphans
 
   log "Waiting for application health..."
   for ((attempt = 1; attempt <= 30; attempt++)); do
