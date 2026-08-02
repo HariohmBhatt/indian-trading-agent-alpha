@@ -1,0 +1,41 @@
+name: Python test gate
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TRADINGAGENTS_HOME: ${{ runner.temp }}/indian-trading-agent
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project dependencies
+        run: python -m pip install --disable-pip-version-check --no-input -e .
+
+      - name: Run Python tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
