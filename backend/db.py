@@ -3,8 +3,10 @@
 import sqlite3
 import os
 import json
-from datetime import datetime
 from contextlib import contextmanager
+
+from backend.database_safety import reject_unexpected_empty_database
+from backend.migrations import upgrade_database
 
 TRADINGAGENTS_HOME = os.getenv(
     "TRADINGAGENTS_HOME",
@@ -17,231 +19,22 @@ DB_PATH = os.getenv(
 
 
 def ensure_db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    with get_db() as conn:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS watchlist (
-                ticker TEXT PRIMARY KEY,
-                exchange TEXT DEFAULT 'NSE',
-                name TEXT,
-                added_at TEXT DEFAULT (datetime('now'))
-            );
+    """Create or upgrade the database through the migration runner."""
 
-            CREATE TABLE IF NOT EXISTS analysis_history (
-                task_id TEXT PRIMARY KEY,
-                ticker TEXT NOT NULL,
-                trade_date TEXT NOT NULL,
-                signal TEXT,
-                market_report TEXT,
-                sentiment_report TEXT,
-                news_report TEXT,
-                fundamentals_report TEXT,
-                investment_plan TEXT,
-                trader_investment_plan TEXT,
-                final_trade_decision TEXT,
-                bull_history TEXT,
-                bear_history TEXT,
-                risk_aggressive_history TEXT,
-                risk_conservative_history TEXT,
-                risk_neutral_history TEXT,
-                stats TEXT,
-                duration_seconds REAL,
-                entry_price REAL,
-                exit_price REAL,
-                pnl_amount REAL,
-                pnl_pct REAL,
-                pnl_status TEXT DEFAULT 'pending',
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS backtest_runs (
-                backtest_id TEXT PRIMARY KEY,
-                ticker TEXT NOT NULL,
-                initial_capital REAL DEFAULT 100000,
-                position_size_pct REAL DEFAULT 10,
-                enable_learning BOOLEAN DEFAULT 0,
-                total_trades INTEGER DEFAULT 0,
-                winning_trades INTEGER DEFAULT 0,
-                losing_trades INTEGER DEFAULT 0,
-                total_return_pct REAL DEFAULT 0,
-                max_drawdown_pct REAL DEFAULT 0,
-                final_portfolio_value REAL,
-                status TEXT DEFAULT 'running',
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS backtest_trades (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                backtest_id TEXT NOT NULL,
-                trade_date TEXT NOT NULL,
-                ticker TEXT NOT NULL,
-                signal TEXT,
-                entry_price REAL,
-                exit_price REAL,
-                pnl_amount REAL,
-                pnl_pct REAL,
-                cumulative_pnl REAL,
-                portfolio_value REAL,
-                duration_seconds REAL,
-                FOREIGN KEY (backtest_id) REFERENCES backtest_runs(backtest_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            );
-
-            -- Paper trading: virtual trades opened from recommendations
-            CREATE TABLE IF NOT EXISTS paper_trades (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticker TEXT NOT NULL,
-                source TEXT,                        -- "recommendation" | "manual" | "scanner" | "ai_analysis"
-                strategy TEXT,                      -- Human-readable: "Recommendation Engine", "Gap Scanner", "AI Pipeline", etc.
-                direction TEXT,                     -- "LONG" | "SHORT"
-                signal TEXT,                        -- BUY, STRONG BUY, etc.
-                score REAL,                         -- from recommendation engine
-                confidence TEXT,                    -- HIGH | MEDIUM | LOW
-                success_probability INTEGER,
-                triggered_signals TEXT,             -- JSON: list of specific signal names that fired
-                entry_price REAL NOT NULL,
-                entry_date TEXT DEFAULT (date('now')),
-                entry_datetime TEXT DEFAULT (datetime('now')),
-                price_1d REAL,                      -- price 1 trading day later
-                price_3d REAL,
-                price_5d REAL,
-                price_10d REAL,
-                pnl_1d_pct REAL,
-                pnl_3d_pct REAL,
-                pnl_5d_pct REAL,
-                pnl_10d_pct REAL,
-                status TEXT DEFAULT 'active',       -- active | expired | manually_closed
-                notes TEXT,
-                updated_at TEXT DEFAULT (datetime('now'))
-            );
-
-            -- Daily Verdict snapshots — measures whether the verdict actually predicted Nifty's move
-            CREATE TABLE IF NOT EXISTS verdict_history (
-                snapshot_date TEXT PRIMARY KEY,         -- YYYY-MM-DD (one row per day)
-                verdict TEXT NOT NULL,                  -- GREEN | YELLOW | RED
-                label TEXT,
-                action TEXT,
-                caution_count INTEGER,
-                favorable_count INTEGER,
-                caution_flags TEXT,                     -- JSON list
-                favorable_flags TEXT,                   -- JSON list
-                position_size_pct REAL,
-                max_trades_today INTEGER,
-                min_conviction TEXT,
-                nifty_close REAL,                       -- Nifty close on snapshot_date
-                nifty_close_1d REAL,                    -- Nifty close 1 trading day later
-                nifty_close_3d REAL,
-                nifty_close_5d REAL,
-                nifty_return_1d_pct REAL,
-                nifty_return_3d_pct REAL,
-                nifty_return_5d_pct REAL,
-                outcome_1d TEXT,                        -- predicted_correctly | predicted_wrong | neutral
-                outcome_3d TEXT,
-                outcome_5d TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now'))
-            );
-
-            -- Shadow trades: every STRONG BUY (and HIGH-conviction BUY) the recommender produces is
-            -- auto-tracked here, regardless of whether the user clicked Track. Lets us measure the
-            -- recommender's true win rate independent of user filtering, and detect false negatives
-            -- (good picks the user skipped).
-            CREATE TABLE IF NOT EXISTS shadow_trades (
-                ticker TEXT NOT NULL,
-                signal_date TEXT NOT NULL,              -- YYYY-MM-DD: when the rec was generated
-                signal TEXT,                            -- STRONG BUY | BUY
-                score REAL,
-                confidence TEXT,                        -- HIGH | MEDIUM | LOW
-                success_probability INTEGER,
-                triggered_signals TEXT,                 -- JSON list (same shape as paper_trades)
-                regime_at_entry TEXT,
-                entry_price REAL NOT NULL,
-                price_1d REAL,
-                price_3d REAL,
-                price_5d REAL,
-                price_10d REAL,
-                pnl_1d_pct REAL,
-                pnl_3d_pct REAL,
-                pnl_5d_pct REAL,
-                pnl_10d_pct REAL,
-                user_tracked INTEGER DEFAULT 0,         -- 1 if user also opened a paper_trade for this ticker on this day
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now')),
-                PRIMARY KEY (ticker, signal_date)       -- idempotent: one shadow per ticker per day
-            );
-
-            -- Historical backtest of the recommendation engine
-            CREATE TABLE IF NOT EXISTS recommender_backtests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT NOT NULL,
-                trade_date TEXT NOT NULL,
-                ticker TEXT NOT NULL,
-                signal TEXT,
-                score REAL,
-                confidence TEXT,
-                success_probability INTEGER,
-                entry_price REAL,
-                return_1d REAL,
-                return_3d REAL,
-                return_5d REAL,
-                return_10d REAL,
-                outcome_1d TEXT,                    -- win | loss | breakeven
-                outcome_5d TEXT,
-                created_at TEXT DEFAULT (datetime('now'))
-            );
-
-            -- Kite equity portfolio reviews: one row for each manual review run.
-            CREATE TABLE IF NOT EXISTS equity_portfolio_reviews (
-                review_id TEXT PRIMARY KEY,
-                review_date TEXT NOT NULL,
-                holdings_json TEXT NOT NULL,
-                summary_json TEXT NOT NULL,
-                insights_json TEXT NOT NULL,
-                model_metadata_json TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now'))
-            );
-
-            -- Local positions store: source of truth for the portfolio view.
-            -- Rows are updated on-demand via Kite sync (source='kite') or
-            -- maintained manually (source='manual'). Manual rows are never
-            -- touched by Kite sync.
-            CREATE TABLE IF NOT EXISTS positions (
-                tradingsymbol TEXT NOT NULL,
-                exchange TEXT NOT NULL DEFAULT 'NSE',
-                isin TEXT,
-                product TEXT,
-                quantity REAL NOT NULL DEFAULT 0,
-                t1_quantity REAL DEFAULT 0,
-                average_price REAL NOT NULL DEFAULT 0,
-                last_price REAL,
-                close_price REAL,
-                invested_value REAL,
-                current_value REAL,
-                pnl REAL,
-                pnl_pct REAL,
-                day_change REAL,
-                day_change_pct REAL,
-                source TEXT NOT NULL DEFAULT 'manual',
-                notes TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now')),
-                PRIMARY KEY (tradingsymbol, exchange)
-            );
-        """)
+    return upgrade_database(DB_PATH)
 
 
 @contextmanager
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    path = reject_unexpected_empty_database(DB_PATH)
+    conn = sqlite3.connect(str(path), timeout=30)
     conn.row_factory = sqlite3.Row
     try:
         yield conn
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -493,7 +286,8 @@ def list_equity_portfolio_reviews(limit: int = 30) -> list[dict]:
 
 def add_paper_trade(data: dict) -> int:
     """Open a new paper trade. Returns the new row ID."""
-    # Migrate: add columns if missing (safe no-op if they already exist)
+    # Keep the historical private helper as a compatibility seam.  It now
+    # delegates to the same versioned runner used during application startup.
     _migrate_paper_trades_columns()
 
     triggered = data.get("triggered_signals")
@@ -535,20 +329,9 @@ def add_paper_trade(data: dict) -> int:
 
 
 def _migrate_paper_trades_columns():
-    """Add new columns to paper_trades if they don't exist (for existing DBs)."""
-    with get_db() as conn:
-        existing = {row["name"] for row in conn.execute("PRAGMA table_info(paper_trades)").fetchall()}
-        for col, ddl in [
-            ("strategy", "TEXT"),
-            ("confidence", "TEXT"),
-            ("triggered_signals", "TEXT"),
-            ("regime_at_entry", "TEXT"),  # Market regime when trade was opened
-        ]:
-            if col not in existing:
-                try:
-                    conn.execute(f"ALTER TABLE paper_trades ADD COLUMN {col} {ddl}")
-                except Exception:
-                    pass
+    """Compatibility wrapper for callers of the former lazy migration."""
+
+    return ensure_db()
 
 
 def list_paper_trades(status: str | None = None) -> list[dict]:

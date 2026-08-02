@@ -15,6 +15,7 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install .
 
 COPY backend ./backend
+COPY scripts ./scripts
 COPY main.py ./
 
 RUN mkdir -p /data

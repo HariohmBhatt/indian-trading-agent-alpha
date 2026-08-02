@@ -29,8 +29,26 @@ compose() {
 }
 
 cd "$ROOT_DIR"
-log "Building and starting the production Docker stack..."
-compose up -d --build --remove-orphans
+log "Validating production data path, database integrity, and backup target..."
+python "$ROOT_DIR/scripts/deployment_preflight.py" \
+  --compose-env-file "$COMPOSE_ENV_FILE"
+
+log "Building replacement images without changing running services..."
+compose build backend frontend
+
+log "Creating an online, encrypted, versioned database backup..."
+compose run --rm --no-deps backend \
+  python /app/scripts/db_backup.py --s3
+
+log "Stopping ingress and application services before migration..."
+compose stop cloudflared frontend backend
+
+log "Applying transactional database migrations..."
+compose run --rm --no-deps backend \
+  python /app/scripts/db_migrate.py
+
+log "Replacing the production services..."
+compose up -d --remove-orphans
 
 log "Waiting for application health..."
 for attempt in $(seq 1 30); do

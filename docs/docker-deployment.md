@@ -58,6 +58,46 @@ Then deploy manually:
 ./deploy/deploy.sh
 ```
 
+### Production database recovery contract
+
+Production SQLite state is upgraded only by the versioned migration runner.
+The runtime `prod.env` must configure an S3-compatible target before a
+deployment:
+
+```dotenv
+TRADINGAGENTS_BACKUP_S3_BUCKET=trading-agent-backups
+TRADINGAGENTS_BACKUP_S3_PREFIX=trading-agent/database
+TRADINGAGENTS_BACKUP_S3_ENDPOINT_URL=https://s3.example.invalid
+TRADINGAGENTS_BACKUP_S3_SSE=AES256
+TRADINGAGENTS_BACKUP_S3_REQUIRE_VERSIONING=true
+```
+
+Use the provider's normal `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` or
+instance credentials. The bucket must support versioning; the backup command
+enables it when permitted, then uploads with server-side encryption and
+requires the returned object version ID.
+
+`./deploy/deploy.sh` has a strict ordering contract:
+
+1. Validate the mounted data directory, reject missing/empty/corrupt state,
+   and verify backup configuration.
+2. Build replacement images without replacing running services.
+3. Run an online SQLite backup while the current backend is still serving.
+4. Stop ingress and application services, then run migrations transactionally.
+5. Replace services and verify backend/frontend health.
+
+If backup or migration fails, the script exits before service replacement. To
+restore a selected version, stop the stack, then run:
+
+```bash
+docker compose run --rm --no-deps backend \
+  python /app/scripts/db_restore.py --s3-key KEY --version-id VERSION_ID
+```
+
+Run the migration script if needed, and start the stack again. Never delete
+`-wal` or `-shm` files manually;
+`backend.backup.cleanup_wal` checkpoints first and refuses a busy writer.
+
 The Cloudflare Tunnel is a container in the production Compose project. Stop
 the old host `cloudflared` service before starting this stack so only the
 Docker connector is active:
