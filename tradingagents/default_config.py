@@ -1,5 +1,13 @@
 import os
 
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 _TRADINGAGENTS_HOME = os.getenv(
     "TRADINGAGENTS_HOME",
     os.path.join(os.path.expanduser("~"), ".tradingagents"),
@@ -24,6 +32,10 @@ DEFAULT_CONFIG = {
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
     "max_recur_limit": 100,
+    "llm_timeout_seconds": _float_env("TRADING_AGENT_LLM_TIMEOUT_SECONDS", 180),
+    "yfinance_timeout_seconds": _float_env(
+        "TRADING_AGENT_YFINANCE_TIMEOUT_SECONDS", 15
+    ),
     # Data vendor configuration
     "data_vendors": {
         "core_stock_apis": "yfinance",

@@ -4,22 +4,28 @@ import sys
 import os
 
 # Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
 
 from dotenv import load_dotenv
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"), override=True)
+
+# Keep repository .env values as development defaults. Environment variables
+# injected by production Compose must take precedence over the repository file.
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"), override=False)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
-from backend.db import ensure_db
+from backend import db
+from backend.observability import RequestObservabilityMiddleware
 from backend.routers import market_data, analysis, watchlist, backtest, strategies, scanner, performance, recommender, settings as settings_router, news as news_router, simulation as simulation_router, insights as insights_router, fii_dii as fii_dii_router, calendar as calendar_router, concentration as concentration_router, daily_verdict as daily_verdict_router, signal_performance as signal_performance_router, verdict_calibration as verdict_calibration_router, regime as regime_router, confidence_calibration as confidence_calibration_router, shadow_trades as shadow_trades_router, memory as memory_router, kite as kite_router, equity_portfolio as equity_portfolio_router, telegram as telegram_router, positions as positions_router
 from backend.settings_manager import load_api_keys_into_env, apply_llm_config_to_default
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    ensure_db()
+    db.ensure_db()
     # Load API keys from DB (UI takes priority over .env)
     load_api_keys_into_env()
     # Apply saved LLM config to DEFAULT_CONFIG
@@ -34,23 +40,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+DEV_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-        "http://dellg15:3000",
-        "http://100.91.136.0:3000",
-        "http://192.168.29.225:3000",
-        "http://192.168.29.213:3000",
-    ],
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1|dellg15|100\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+):3000",
+    allow_origins=DEV_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestObservabilityMiddleware)
 
 app.include_router(market_data.router)
 app.include_router(analysis.router)
@@ -82,7 +86,48 @@ app.include_router(positions_router.router)
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "indian-trading-agent"}
+    """Process liveness; intentionally does not touch the database."""
+    return {
+        "status": "ok",
+        "service": "indian-trading-agent",
+        "release_sha": os.getenv("TRADING_AGENT_RELEASE_SHA", "unknown"),
+    }
+
+
+@app.get("/api/health/live", include_in_schema=False)
+def health_live():
+    return health()
+
+
+@app.get("/api/ready")
+def readiness():
+    """Application readiness, including a read against the configured database."""
+    try:
+        db.check_db()
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "not_ready",
+                "ready": False,
+                "service": "indian-trading-agent",
+                "release_sha": os.getenv("TRADING_AGENT_RELEASE_SHA", "unknown"),
+                "checks": {"database": {"status": "failed"}},
+            },
+        )
+
+    return {
+        "status": "ready",
+        "ready": True,
+        "service": "indian-trading-agent",
+        "release_sha": os.getenv("TRADING_AGENT_RELEASE_SHA", "unknown"),
+        "checks": {"database": {"status": "ok"}},
+    }
+
+
+@app.get("/api/health/ready", include_in_schema=False)
+def health_ready():
+    return readiness()
 
 
 @app.get("/api/config")

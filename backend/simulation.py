@@ -6,10 +6,20 @@ All simulations are FREE (pure price math from yfinance, no AI API calls).
 import yfinance as yf
 import uuid
 from datetime import datetime, timedelta, date
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from tradingagents.utils.ticker import normalize_ticker
 from tradingagents.utils.market_calendar import next_trading_day, is_trading_day
 from backend.scanner import UNIVERSES
+from backend.execution import (
+    MAX_RECOMMENDER_BACKTEST_DATES,
+    MAX_RECOMMENDER_STOCKS,
+    YFINANCE_TIMEOUT_SECONDS,
+    ExecutionRejected,
+    InputLimitExceeded,
+    bounded_items,
+    check_deadline,
+    get_executor,
+)
 from backend.db import (
     add_paper_trade,
     list_paper_trades,
@@ -48,7 +58,7 @@ def open_paper_trade(
     symbol = normalize_ticker(ticker)
     try:
         t = yf.Ticker(symbol)
-        hist = t.history(period="2d")
+        hist = t.history(period="2d", timeout=YFINANCE_TIMEOUT_SECONDS)
         if hist.empty:
             return {"ok": False, "error": f"No price data for {symbol}"}
         current_price = float(hist.iloc[-1]["Close"])
@@ -96,7 +106,7 @@ def close_paper_trade(trade_id: int) -> dict:
     symbol = normalize_ticker(trade["ticker"])
     try:
         t = yf.Ticker(symbol)
-        hist = t.history(period="2d")
+        hist = t.history(period="2d", timeout=YFINANCE_TIMEOUT_SECONDS)
         if hist.empty:
             return {"ok": False, "error": f"No price data for {symbol}"}
         current_price = round(float(hist.iloc[-1]["Close"]), 2)
@@ -147,7 +157,11 @@ def _price_n_days_later(symbol: str, entry_date_str: str, n_trading_days: int) -
         start = (target - timedelta(days=3)).strftime("%Y-%m-%d")
         end = (target + timedelta(days=1)).strftime("%Y-%m-%d")
         t = yf.Ticker(symbol)
-        hist = t.history(start=start, end=end)
+        hist = t.history(
+            start=start,
+            end=end,
+            timeout=YFINANCE_TIMEOUT_SECONDS,
+        )
         if hist.empty:
             return None
 
@@ -261,7 +275,11 @@ def _analyze_stock_at_date(ticker: str, target_date: date) -> dict | None:
         # Fetch data: 6 months BEFORE target + 15 days AFTER for outcome measurement
         start = (target_date - timedelta(days=200)).strftime("%Y-%m-%d")
         end = (target_date + timedelta(days=20)).strftime("%Y-%m-%d")
-        hist = t.history(start=start, end=end)
+        hist = t.history(
+            start=start,
+            end=end,
+            timeout=YFINANCE_TIMEOUT_SECONDS,
+        )
         if hist.empty or len(hist) < 50:
             return None
 
@@ -382,13 +400,16 @@ def run_recommender_backtest(
     start_date: str = None,
     end_date: str = None,
     interval_days: int = 5,
+    deadline: float | None = None,
 ) -> dict:
     """Run the recommendation engine on historical dates and measure actual outcomes.
 
     FREE — no AI API cost, pure price math.
     """
-    stocks = UNIVERSES.get(universe, [])
+    requested_stocks = UNIVERSES.get(universe, [])
+    stocks = bounded_items(requested_stocks, MAX_RECOMMENDER_STOCKS)
     run_id = str(uuid.uuid4())[:8]
+    interval_days = max(1, int(interval_days))
 
     # Default to last 60 days if not specified
     if not end_date:
@@ -412,19 +433,38 @@ def run_recommender_backtest(
         else:
             current += timedelta(days=1)
 
+    if len(dates) > MAX_RECOMMENDER_BACKTEST_DATES:
+        raise InputLimitExceeded(
+            "recommender backtest dates",
+            len(dates),
+            MAX_RECOMMENDER_BACKTEST_DATES,
+        )
+
     all_results = []
+    failed = 0
+    executor = get_executor("recommender-backtest-worker")
 
     for d in dates:
+        check_deadline(deadline, workload="recommender-backtest", job_id=run_id)
         # Analyze all stocks for this date in parallel
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(_analyze_stock_at_date, ticker, d) for ticker in stocks]
-            for f in as_completed(futures):
+        futures = {}
+        for ticker in stocks:
+            try:
+                futures[executor.submit(_analyze_stock_at_date, ticker, d)] = ticker
+            except ExecutionRejected:
+                failed += 1
+                continue
+        for f in as_completed(futures):
+            try:
                 result = f.result()
-                if result:
-                    result["run_id"] = run_id
-                    result["trade_date"] = d.strftime("%Y-%m-%d")
-                    save_recommender_backtest_row(result)
-                    all_results.append(result)
+            except Exception:
+                failed += 1
+                result = None
+            if result:
+                result["run_id"] = run_id
+                result["trade_date"] = d.strftime("%Y-%m-%d")
+                save_recommender_backtest_row(result)
+                all_results.append(result)
 
     # Compute summary stats
     if all_results:
@@ -452,6 +492,9 @@ def run_recommender_backtest(
     return {
         "run_id": run_id,
         "universe": universe,
+        "requested_stocks": len(requested_stocks),
+        "stocks_analyzed": len(stocks),
+        "failed": failed,
         "start_date": start.strftime("%Y-%m-%d"),
         "end_date": end.strftime("%Y-%m-%d"),
         "dates_tested": len(dates),

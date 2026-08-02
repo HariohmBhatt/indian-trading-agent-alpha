@@ -164,8 +164,10 @@ cd frontend && npm install && npm run dev
 
 ### Docker deployment
 
-For separate Docker development and production environments, including the
-local GitHub Actions runner that deploys the `prod` branch, see
+For the complete Docker, GitHub Actions, Cloudflare, branch-protection, and
+operations runbook, see
+[`docs/operations/deployment-runbook.md`](docs/operations/deployment-runbook.md).
+The shorter Docker reference remains at
 [`docs/docker-deployment.md`](docs/docker-deployment.md).
 
 ---

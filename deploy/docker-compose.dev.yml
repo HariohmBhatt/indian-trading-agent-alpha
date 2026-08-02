@@ -18,7 +18,7 @@ services:
       - ../main.py:/app/main.py:ro
       - indian-trading-agent-dev-data:/data
     ports:
-      - "${TRADING_AGENT_DEV_BACKEND_PORT:-8000}:8000"
+      - "127.0.0.1:${TRADING_AGENT_DEV_BACKEND_PORT:-8000}:8000"
     restart: "no"
     networks:
       - trading-dev
@@ -40,7 +40,7 @@ services:
       - indian-trading-agent-dev-node-modules:/app/frontend/node_modules
       - indian-trading-agent-dev-next:/app/frontend/.next
     ports:
-      - "${TRADING_AGENT_DEV_FRONTEND_PORT:-3000}:3000"
+      - "127.0.0.1:${TRADING_AGENT_DEV_FRONTEND_PORT:-3000}:3000"
     restart: "no"
     networks:
       - trading-dev

@@ -1,6 +1,7 @@
 """Read-only Kite Connect integration for portfolio review."""
 
 import json
+import math
 from datetime import date
 from typing import Any
 
@@ -20,6 +21,10 @@ class KiteConfigError(RuntimeError):
 
 class KiteAuthExpired(RuntimeError):
     """Raised when Kite rejects the current token."""
+
+
+class KiteHoldingsError(RuntimeError):
+    """Raised when Kite returns a response that cannot be trusted as holdings."""
 
 
 def mask_secret(value: str | None) -> str | None:
@@ -173,27 +178,73 @@ def _num(value: Any) -> float:
         return 0.0
 
 
-def normalize_holdings(holdings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _holding_number(value: Any, field: str, index: int) -> float:
+    if value is None or value == "":
+        return 0.0
+    if isinstance(value, bool):
+        raise KiteHoldingsError(f"Kite holdings row {index} has invalid {field}")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise KiteHoldingsError(f"Kite holdings row {index} has invalid {field}") from exc
+    if not math.isfinite(number):
+        raise KiteHoldingsError(f"Kite holdings row {index} has non-finite {field}")
+    return number
+
+
+def normalize_holdings(holdings: Any) -> list[dict[str, Any]]:
+    """Validate and normalize one complete Kite holdings response.
+
+    Kite's empty list is a valid, confirmed empty portfolio. Any other
+    unexpected outer shape or malformed row is rejected before the local
+    positions store can be changed.
+    """
+    if not isinstance(holdings, list):
+        raise KiteHoldingsError("Kite holdings response must be a list")
+
     normalized = []
-    for h in holdings or []:
-        quantity = _num(h.get("quantity"))
-        avg_price = _num(h.get("average_price"))
-        last_price = _num(h.get("last_price"))
-        close_price = _num(h.get("close_price"))
+    seen = set()
+    for index, h in enumerate(holdings):
+        if not isinstance(h, dict):
+            raise KiteHoldingsError(f"Kite holdings row {index} is malformed")
+
+        raw_symbol = h.get("tradingsymbol") or h.get("ticker")
+        if not isinstance(raw_symbol, str) or not raw_symbol.strip():
+            raise KiteHoldingsError(f"Kite holdings row {index} has no trading symbol")
+        symbol = raw_symbol.strip().upper()
+        exchange = h.get("exchange") or "NSE"
+        if not isinstance(exchange, str) or not exchange.strip():
+            raise KiteHoldingsError(f"Kite holdings row {index} has no exchange")
+        exchange = exchange.strip().upper()
+        key = (symbol, exchange)
+        if key in seen:
+            raise KiteHoldingsError(f"Kite holdings contain duplicate row: {symbol} ({exchange})")
+        seen.add(key)
+
+        quantity = _holding_number(h.get("quantity"), "quantity", index)
+        avg_price = _holding_number(h.get("average_price"), "average_price", index)
+        last_price = _holding_number(h.get("last_price"), "last_price", index)
+        close_price = _holding_number(h.get("close_price"), "close_price", index)
         invested_value = avg_price * quantity
         current_value = last_price * quantity
-        pnl = _num(h.get("pnl")) if h.get("pnl") is not None else current_value - invested_value
+        pnl = (
+            _holding_number(h.get("pnl"), "pnl", index)
+            if h.get("pnl") is not None
+            else current_value - invested_value
+        )
         pnl_pct = (pnl / invested_value * 100) if invested_value else 0.0
-        day_change = _num(h.get("day_change"))
-        day_change_pct = _num(h.get("day_change_percentage"))
+        day_change = _holding_number(h.get("day_change"), "day_change", index)
+        day_change_pct = _holding_number(
+            h.get("day_change_percentage"), "day_change_percentage", index
+        )
 
         normalized.append({
-            "tradingsymbol": h.get("tradingsymbol") or h.get("ticker") or "",
-            "exchange": h.get("exchange") or "NSE",
+            "tradingsymbol": symbol,
+            "exchange": exchange,
             "isin": h.get("isin"),
             "product": h.get("product"),
             "quantity": quantity,
-            "t1_quantity": _num(h.get("t1_quantity")),
+            "t1_quantity": _holding_number(h.get("t1_quantity"), "t1_quantity", index),
             "average_price": round(avg_price, 2),
             "last_price": round(last_price, 2),
             "close_price": round(close_price, 2),

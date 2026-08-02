@@ -8,27 +8,299 @@ on:
 permissions:
   contents: read
 
+env:
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+  OCI_SOURCE: ${{ github.server_url }}/${{ github.repository }}
+
 concurrency:
   group: trading-agent-production
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Validate deployment inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out the change
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Verify Python dependency lock
+        run: |
+          python -m pip install \
+            --disable-pip-version-check \
+            --no-cache-dir \
+            "pip-tools==7.6.0"
+          pip-compile \
+            --no-header \
+            --allow-unsafe \
+            --generate-hashes \
+            --no-annotate \
+            --no-emit-index-url \
+            --pip-args="--python-version 3.12" \
+            --output-file=requirements.lock \
+            pyproject.toml
+          git diff --exit-code -- requirements.lock
+
+      - name: Verify frontend dependency lock
+        working-directory: frontend
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Enforce image and action pinning policy
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          floating_tag=":$(printf 'la%s' test)"
+          if rg -n "${floating_tag}\b" deploy .github; then
+            echo "Floating mutable image tags are forbidden."
+            exit 1
+          fi
+
+          floating_actions="$(
+            rg -n \
+              'uses:[[:space:]]+[^[:space:]@]+@(v[0-9]|main|master|trunk|HEAD)\b' \
+              .github || true
+          )"
+          if [[ -n "$floating_actions" ]]; then
+            printf '%s\n' "$floating_actions"
+            echo "External GitHub Actions must be pinned to commit SHAs."
+            exit 1
+          fi
+
+          while IFS= read -r from_line; do
+            if [[ "$from_line" != *'@sha256:'* ]]; then
+              printf '%s\n' "$from_line"
+              echo "External production FROM inputs must be digest-pinned."
+              exit 1
+            fi
+          done < <(
+            rg -n \
+              '^FROM[[:space:]]+(python|node|ubuntu|[[:alnum:]._-]+/[[:alnum:]._-]+):' \
+              deploy/docker deploy/runner || true
+          )
+
+          if rg -n '^[[:space:]]+build:' deploy/docker-compose.prod.yml; then
+            echo "Production Compose must consume published images, not build them."
+            exit 1
+          fi
+
+      - name: Validate production Compose contract
+        env:
+          TRADING_AGENT_PROD_ENV_FILE: ${{ runner.temp }}/prod.env
+          TRADING_AGENT_PROD_BACKEND_IMAGE: ghcr.io/example/indian-trading-agent/backend@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          TRADING_AGENT_PROD_FRONTEND_IMAGE: ghcr.io/example/indian-trading-agent/frontend@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        run: |
+          touch "$TRADING_AGENT_PROD_ENV_FILE"
+          docker compose \
+            --env-file deploy/compose.env.example \
+            --file deploy/docker-compose.prod.yml \
+            config --quiet
+
+      - name: Set up Buildx for pull-request validation
+        if: github.event_name == 'pull_request'
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build backend without pushing
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/docker/backend.Dockerfile
+          target: production
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: local/indian-trading-agent-backend:pr-${{ github.event.pull_request.number }}
+          build-args: |
+            OCI_SOURCE=${{ env.OCI_SOURCE }}
+            OCI_REVISION=${{ github.event.pull_request.head.sha }}
+
+      - name: Build frontend without pushing
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/docker/frontend.Dockerfile
+          target: production
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: local/indian-trading-agent-frontend:pr-${{ github.event.pull_request.number }}
+          build-args: |
+            OCI_SOURCE=${{ env.OCI_SOURCE }}
+            OCI_REVISION=${{ github.event.pull_request.head.sha }}
+
+      - name: Inspect pull-request image digests and labels
+        if: github.event_name == 'pull_request'
+        env:
+          EXPECTED_REVISION: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          for image in \
+            "local/indian-trading-agent-backend:pr-${{ github.event.pull_request.number }}" \
+            "local/indian-trading-agent-frontend:pr-${{ github.event.pull_request.number }}"; do
+            image_id="$(docker image inspect --format '{{.Id}}' "$image")"
+            source="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "$image")"
+            revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")"
+            [[ "$image_id" == sha256:* ]]
+            [[ "$source" == "$OCI_SOURCE" ]]
+            [[ "$revision" == "$EXPECTED_REVISION" ]]
+            printf '%s id=%s source=%s revision=%s\n' "$image" "$image_id" "$source" "$revision"
+          done
+
+  publish:
+    name: Publish immutable GHCR artifacts
+    needs: validate
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      backend_image: ghcr.io/${{ github.repository }}/backend@${{ steps.backend.outputs.digest }}
+      frontend_image: ghcr.io/${{ github.repository }}/frontend@${{ steps.frontend.outputs.digest }}
+
+    steps:
+      - name: Check out the release commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Generate backend image metadata
+        id: backend-meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/backend
+          tags: type=raw,value=sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ env.OCI_SOURCE }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build and publish backend
+        id: backend
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/docker/backend.Dockerfile
+          target: production
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.backend-meta.outputs.tags }}
+          labels: ${{ steps.backend-meta.outputs.labels }}
+          build-args: |
+            OCI_SOURCE=${{ env.OCI_SOURCE }}
+            OCI_REVISION=${{ github.sha }}
+
+      - name: Generate frontend image metadata
+        id: frontend-meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/frontend
+          tags: type=raw,value=sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ env.OCI_SOURCE }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build and publish frontend
+        id: frontend
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/docker/frontend.Dockerfile
+          target: production
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.frontend-meta.outputs.tags }}
+          labels: ${{ steps.frontend-meta.outputs.labels }}
+          build-args: |
+            OCI_SOURCE=${{ env.OCI_SOURCE }}
+            OCI_REVISION=${{ github.sha }}
+
+      - name: Inspect published image digests
+        env:
+          BACKEND_IMAGE: ${{ env.IMAGE_PREFIX }}/backend
+          BACKEND_DIGEST: ${{ steps.backend.outputs.digest }}
+          FRONTEND_IMAGE: ${{ env.IMAGE_PREFIX }}/frontend
+          FRONTEND_DIGEST: ${{ steps.frontend.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for digest in "$BACKEND_DIGEST" "$FRONTEND_DIGEST"; do
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          done
+          docker buildx imagetools inspect "${BACKEND_IMAGE}@${BACKEND_DIGEST}"
+          docker buildx imagetools inspect "${FRONTEND_IMAGE}@${FRONTEND_DIGEST}"
+
   deploy:
-    name: Build and deploy on dellg15
+    name: Deploy immutable artifacts on dellg15
+    needs: publish
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on:
       - self-hosted
       - linux
       - x64
       - trading-agent-prod
     timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: read
 
     steps:
-      - name: Check out the prod commit
-        uses: actions/checkout@v4
+      - name: Check out the release commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 1
+          ref: ${{ github.sha }}
 
-      - name: Deploy Docker production stack
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deploy immutable Docker production stack
         env:
           TRADING_AGENT_COMPOSE_ENV_FILE: /home/hariohm/.config/indian-trading-agent/compose.env
+          TRADING_AGENT_DEPLOY_LOCK_FILE: /home/hariohm/.config/indian-trading-agent/deploy.lock
+          TRADING_AGENT_EXPECTED_REF: refs/heads/prod
+          TRADING_AGENT_EXPECTED_SHA: ${{ github.sha }}
+          TRADING_AGENT_PROD_BACKEND_IMAGE: ${{ needs.publish.outputs.backend_image }}
+          TRADING_AGENT_PROD_FRONTEND_IMAGE: ${{ needs.publish.outputs.frontend_image }}
         run: ./deploy/deploy.sh
+
+      - name: Inspect deployed image digests and labels
+        env:
+          TRADING_AGENT_PROD_BACKEND_IMAGE: ${{ needs.publish.outputs.backend_image }}
+          TRADING_AGENT_PROD_FRONTEND_IMAGE: ${{ needs.publish.outputs.frontend_image }}
+        run: |
+          set -euo pipefail
+          for image in "$TRADING_AGENT_PROD_BACKEND_IMAGE" "$TRADING_AGENT_PROD_FRONTEND_IMAGE"; do
+            image_id="$(docker image inspect --format '{{.Id}}' "$image")"
+            source="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "$image")"
+            revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")"
+            [[ "$image_id" == sha256:* ]]
+            [[ "$source" == "$OCI_SOURCE" ]]
+            [[ "$revision" == "${GITHUB_SHA}" ]]
+            printf '%s id=%s source=%s revision=%s\n' "$image" "$image_id" "$source" "$revision"
+          done

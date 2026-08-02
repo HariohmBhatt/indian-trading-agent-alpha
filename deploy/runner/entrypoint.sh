@@ -2,7 +2,6 @@
 set -Eeuo pipefail
 
 : "${RUNNER_REPO_URL:?RUNNER_REPO_URL is required}"
-: "${RUNNER_TOKEN:?RUNNER_TOKEN is required on the first start}"
 
 RUNNER_NAME="${RUNNER_NAME:-dellg15-prod-runner}"
 RUNNER_LABELS="${RUNNER_LABELS:-trading-agent-prod}"
@@ -29,6 +28,7 @@ cd "$RUNNER_DIR"
 # tokens expire quickly, but the registered runner can reconnect after a
 # reboot without a new token.
 if [[ ! -f .runner ]]; then
+  : "${RUNNER_TOKEN:?RUNNER_TOKEN is required on the first start}"
   ./config.sh \
     --unattended \
     --url "$RUNNER_REPO_URL" \
@@ -38,6 +38,9 @@ if [[ ! -f .runner ]]; then
     --work "$RUNNER_HOME/_work" \
     --replace
 fi
+
+# Registration credentials must not reach the long-lived runner process.
+unset RUNNER_TOKEN
 
 chown -R runner:runner "$RUNNER_DIR"
 exec runuser --user runner -- ./run.sh
