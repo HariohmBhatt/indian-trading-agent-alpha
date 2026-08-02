@@ -17,6 +17,29 @@ services:
     networks:
       - trading-prod
 
+  worker:
+    image: ${TRADING_AGENT_PROD_BACKEND_IMAGE:-indian-trading-agent-backend:prod}
+    build:
+      context: ..
+      dockerfile: deploy/docker/backend.Dockerfile
+      target: production
+    env_file:
+      - ${TRADING_AGENT_PROD_ENV_FILE:?Set TRADING_AGENT_PROD_ENV_FILE in the deployment environment}
+    environment:
+      TRADINGAGENTS_HOME: /data
+      TRADING_AGENT_SCHEDULER_TIMEZONE: ${TRADING_AGENT_SCHEDULER_TIMEZONE:-Asia/Kolkata}
+      TRADING_AGENT_SCHEDULER_POLL_SECONDS: ${TRADING_AGENT_SCHEDULER_POLL_SECONDS:-30}
+      TRADING_AGENT_SCHEDULER_LEASE_SECONDS: ${TRADING_AGENT_SCHEDULER_LEASE_SECONDS:-900}
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - ${TRADING_AGENT_PROD_DATA_DIR:?Set TRADING_AGENT_PROD_DATA_DIR in the deployment environment}:/data
+    command: ["python", "-m", "backend.jobs.worker"]
+    restart: unless-stopped
+    networks:
+      - trading-prod
+
   frontend:
     image: ${TRADING_AGENT_PROD_FRONTEND_IMAGE:-indian-trading-agent-frontend:prod}
     build:

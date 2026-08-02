@@ -58,6 +58,23 @@ Then deploy manually:
 ./deploy/deploy.sh
 ```
 
+Production also runs one backend-image worker container. It shares the
+production `/data` volume with the API and persists its leases and job status
+in SQLite. The worker uses `Asia/Kolkata` explicitly, independent of the
+Docker host timezone:
+
+- verdict snapshot: weekdays at 15:45 IST
+- portfolio freshness review: weekdays at 16:00 IST
+- outcome backfill: weekdays at 16:30 IST
+- earnings calendar refresh: Mondays at 08:00 IST
+
+Set `TRADING_AGENT_SCHEDULER_TIMEZONE`,
+`TRADING_AGENT_SCHEDULER_POLL_SECONDS`, and
+`TRADING_AGENT_SCHEDULER_LEASE_SECONDS` in the host-only Compose environment
+when the defaults need to be changed. A missing daily Kite token is recorded
+as an expected portfolio skip; it does not call Kite or Telegram and does not
+page the operator.
+
 The Cloudflare Tunnel is a container in the production Compose project. Stop
 the old host `cloudflared` service before starting this stack so only the
 Docker connector is active:
@@ -83,6 +100,14 @@ sudo systemctl enable --now docker
 The production containers use `restart: unless-stopped`, so Docker brings them
 back after a reboot. The development stack is intentionally not configured to
 start automatically.
+
+Inspect the worker independently when troubleshooting freshness:
+
+```bash
+docker compose \
+  --env-file ~/.config/indian-trading-agent/compose.env \
+  -f deploy/docker-compose.prod.yml logs -f worker
+```
 
 ## GitHub Actions deployment
 
