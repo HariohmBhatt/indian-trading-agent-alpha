@@ -99,9 +99,11 @@ jobs:
 
       - name: Validate production Compose contract
         env:
+          TRADING_AGENT_PROD_ENV_FILE: ${{ runner.temp }}/prod.env
           TRADING_AGENT_PROD_BACKEND_IMAGE: ghcr.io/example/indian-trading-agent/backend@sha256:0000000000000000000000000000000000000000000000000000000000000000
           TRADING_AGENT_PROD_FRONTEND_IMAGE: ghcr.io/example/indian-trading-agent/frontend@sha256:0000000000000000000000000000000000000000000000000000000000000000
         run: |
+          touch "$TRADING_AGENT_PROD_ENV_FILE"
           docker compose \
             --env-file deploy/compose.env.example \
             --file deploy/docker-compose.prod.yml \
