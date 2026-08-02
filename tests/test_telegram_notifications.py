@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import backend.db as db
@@ -78,6 +79,8 @@ class TelegramNotificationTests(unittest.TestCase):
             "insights": {"portfolio_status": "EMPTY", "plain_summary": "No equity holdings found in Kite."},
             "model_metadata": {"mode": "test"},
         }
+        db.set_setting("positions_sync_status", "empty")
+        db.set_setting("positions_last_success_at", datetime.now(timezone.utc).isoformat())
         db.save_equity_portfolio_review(review)
 
         with patch("backend.routers.equity_portfolio.send_html_message_with_optional_buttons", return_value={"ok": True, "result": {"message_id": 42}}):
@@ -87,6 +90,89 @@ class TelegramNotificationTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["review_id"], "abc123")
         self.assertEqual(resp.json()["message_id"], 42)
+
+    def test_latest_kite_review_is_not_sent_when_sync_is_stale(self):
+        from fastapi.testclient import TestClient
+        from backend.app import app
+
+        db.upsert_position({
+            "tradingsymbol": "STALE",
+            "exchange": "NSE",
+            "quantity": 1,
+            "average_price": 100,
+            "last_price": 90,
+            "current_value": 90,
+            "source": "kite",
+        })
+        db.set_setting("positions_sync_status", "success")
+        db.set_setting(
+            "positions_last_success_at",
+            (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+        )
+        db.save_equity_portfolio_review({
+            "review_id": "stale123",
+            "review_date": "2026-07-09",
+            "holdings": [{"tradingsymbol": "STALE", "source": "kite"}],
+            "summary": {},
+            "insights": {"portfolio_status": "STABLE"},
+            "model_metadata": {},
+        })
+
+        with patch(
+            "backend.routers.equity_portfolio.send_html_message_with_optional_buttons"
+        ) as send:
+            with TestClient(app) as client:
+                resp = client.post("/api/equity-portfolio/reviews/latest/send-telegram")
+
+        self.assertEqual(resp.status_code, 503)
+        send.assert_not_called()
+
+    def test_manual_only_review_can_be_sent_without_kite_freshness(self):
+        from fastapi.testclient import TestClient
+        from backend.app import app
+
+        db.set_setting("positions_sync_status", "failed")
+        db.set_setting("positions_sync_error", "Kite unavailable")
+        db.save_equity_portfolio_review({
+            "review_id": "manual123",
+            "review_date": "2026-07-09",
+            "holdings": [{"tradingsymbol": "LOCAL", "source": "manual"}],
+            "summary": {},
+            "insights": {"portfolio_status": "STABLE"},
+            "model_metadata": {},
+        })
+
+        with patch(
+            "backend.routers.equity_portfolio.send_html_message_with_optional_buttons",
+            return_value={"ok": True, "result": {"message_id": 43}},
+        ):
+            with TestClient(app) as client:
+                resp = client.post("/api/equity-portfolio/reviews/latest/send-telegram")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["message_id"], 43)
+
+    def test_review_creation_refuses_failed_kite_snapshot(self):
+        from fastapi.testclient import TestClient
+        from backend.app import app
+
+        db.upsert_position({
+            "tradingsymbol": "FAILED",
+            "exchange": "NSE",
+            "quantity": 1,
+            "average_price": 100,
+            "last_price": 95,
+            "current_value": 95,
+            "source": "kite",
+        })
+        db.set_setting("positions_sync_status", "failed")
+        db.set_setting("positions_sync_error", "temporary broker failure")
+
+        with TestClient(app) as client:
+            resp = client.post("/api/equity-portfolio/reviews")
+
+        self.assertEqual(resp.status_code, 503)
+        self.assertIn("temporary broker failure", resp.json()["detail"])
 
     def test_kite_login_reminder_route_sends_button_message(self):
         from fastapi.testclient import TestClient

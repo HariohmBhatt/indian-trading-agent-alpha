@@ -8,7 +8,7 @@ import {
   syncPositions,
   updatePosition,
 } from "@/lib/api";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -49,6 +49,17 @@ export type Position = {
   notes?: string | null;
 };
 
+export type PositionSyncState = {
+  status: "never" | "success" | "empty" | "failed" | string;
+  error?: string | null;
+  last_success_at?: string | null;
+  age_seconds?: number | null;
+  max_age_seconds?: number;
+  is_fresh: boolean;
+  is_stale: boolean;
+  confirmed_empty: boolean;
+};
+
 type PositionsSummary = {
   total_positions: number;
   total_invested: number;
@@ -61,10 +72,22 @@ type PositionsSummary = {
   kite_count: number;
 };
 
-type PositionsView = {
+export type PositionsView = {
   positions: Position[];
   count: number;
   last_sync: string | null;
+  sync: PositionSyncState;
+  sync_status: string;
+  sync_error?: string | null;
+  last_success_at?: string | null;
+  age_seconds?: number | null;
+  sync_age_seconds?: number | null;
+  sync_state?: PositionSyncState;
+  is_stale: boolean;
+  manual_only: boolean;
+  kite_backed: boolean;
+  source_mode: "manual" | "kite" | "mixed" | "empty" | string;
+  can_review: boolean;
   summary: PositionsSummary;
 };
 
@@ -96,6 +119,13 @@ function formatSyncTime(iso: string | null) {
   }
 }
 
+function formatAge(seconds: number | null | undefined) {
+  if (seconds == null) return "unknown age";
+  if (seconds < 60) return "less than a minute old";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m old`;
+  return `${(seconds / 3600).toFixed(1)}h old`;
+}
+
 type FormState = {
   tradingsymbol: string;
   exchange: string;
@@ -114,7 +144,13 @@ const emptyForm: FormState = {
   notes: "",
 };
 
-export function PositionsPanel({ kiteConnected }: { kiteConnected: boolean }) {
+export function PositionsPanel({
+  kiteConnected,
+  onViewChange,
+}: {
+  kiteConnected: boolean;
+  onViewChange?: (view: PositionsView) => void;
+}) {
   const [view, setView] = useState<PositionsView | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -128,6 +164,7 @@ export function PositionsPanel({ kiteConnected }: { kiteConnected: boolean }) {
     try {
       const data = (await getPositions()) as PositionsView;
       setView(data);
+      onViewChange?.(data);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load positions");
     } finally {
@@ -137,6 +174,8 @@ export function PositionsPanel({ kiteConnected }: { kiteConnected: boolean }) {
 
   useEffect(() => {
     load();
+    // The panel performs one initial load; subsequent updates are explicit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSync = async () => {
@@ -245,6 +284,8 @@ export function PositionsPanel({ kiteConnected }: { kiteConnected: boolean }) {
 
   const summary = view?.summary;
   const positions = view?.positions || [];
+  const sync = view?.sync;
+  const showStaleState = !!sync?.is_stale && !view?.manual_only;
 
   return (
     <div className="space-y-4">
@@ -255,6 +296,16 @@ export function PositionsPanel({ kiteConnected }: { kiteConnected: boolean }) {
           <span className="text-xs text-muted-foreground">
             Local store · last synced {formatSyncTime(view?.last_sync || null)}
           </span>
+          {view?.manual_only ? (
+            <Badge variant="outline" className={statusColors.neutral}>MANUAL ONLY</Badge>
+          ) : sync?.status ? (
+            <Badge
+              variant="outline"
+              className={sync.status === "failed" || sync.is_stale ? statusColors.caution : statusColors.info}
+            >
+              {sync.status.toUpperCase()}
+            </Badge>
+          ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={openAdd}>
@@ -274,6 +325,38 @@ export function PositionsPanel({ kiteConnected }: { kiteConnected: boolean }) {
       {!kiteConnected && (
         <p className="text-xs text-muted-foreground">
           Kite is not connected for today — sync is disabled, but your stored positions remain available below.
+        </p>
+      )}
+
+      {view?.manual_only && (
+        <Card className="border-blue-200 dark:border-blue-800">
+          <CardContent className="p-4 text-sm">
+            <p className="font-medium">Manual-only portfolio</p>
+            <p className="text-muted-foreground mt-1">
+              These positions are explicitly maintained locally; Kite freshness is not required for their review.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {showStaleState && (
+        <Card className="border-yellow-300 bg-yellow-50/50 dark:border-yellow-800 dark:bg-yellow-950/20">
+          <CardContent className="p-4 text-sm">
+            <p className="font-medium">
+              {sync?.status === "failed" ? "Kite sync failed" : "Portfolio data is stale"}
+            </p>
+            <p className="text-muted-foreground mt-1">
+              Kite-backed reviews and Telegram reports are disabled until a successful sync completes.
+              {sync?.last_success_at ? ` Last success was ${formatAge(sync.age_seconds)}.` : " No successful sync is recorded."}
+            </p>
+            {sync?.error && <p className="text-red-600 dark:text-red-300 mt-1">{sync.error}</p>}
+          </CardContent>
+        </Card>
+      )}
+
+      {sync?.status === "empty" && !view?.manual_only && (
+        <p className="text-xs text-muted-foreground">
+          Kite confirmed that there are no equity holdings at the last successful sync.
         </p>
       )}
 
