@@ -33,15 +33,13 @@ services:
       - trading-prod
 
   worker:
-    image: ${TRADING_AGENT_PROD_BACKEND_IMAGE:-indian-trading-agent-backend:prod}
-    build:
-      context: ..
-      dockerfile: deploy/docker/backend.Dockerfile
-      target: production
+    image: ${TRADING_AGENT_PROD_BACKEND_IMAGE:?Set TRADING_AGENT_PROD_BACKEND_IMAGE to a digest-qualified GHCR image}
+    pull_policy: always
     env_file:
       - ${TRADING_AGENT_PROD_ENV_FILE:?Set TRADING_AGENT_PROD_ENV_FILE in the deployment environment}
     environment:
       TRADINGAGENTS_HOME: /data
+      TRADING_AGENT_RELEASE_SHA: ${TRADING_AGENT_RELEASE_SHA:-unknown}
       TRADING_AGENT_SCHEDULER_TIMEZONE: ${TRADING_AGENT_SCHEDULER_TIMEZONE:-Asia/Kolkata}
       TRADING_AGENT_SCHEDULER_POLL_SECONDS: ${TRADING_AGENT_SCHEDULER_POLL_SECONDS:-30}
       TRADING_AGENT_SCHEDULER_LEASE_SECONDS: ${TRADING_AGENT_SCHEDULER_LEASE_SECONDS:-900}
