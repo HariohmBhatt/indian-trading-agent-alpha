@@ -3,8 +3,15 @@
 import yfinance as yf
 import numpy as np
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from tradingagents.utils.ticker import normalize_ticker
+from backend.execution import (
+    MAX_SCANNER_STOCKS,
+    YFINANCE_TIMEOUT_SECONDS,
+    ExecutionRejected,
+    bounded_items,
+    get_executor,
+)
 
 # --- Stock Universes ---
 
@@ -79,7 +86,7 @@ def _fetch_stock_data(ticker: str, period: str = "3mo") -> dict | None:
     try:
         symbol = f"{ticker}.NS"
         t = yf.Ticker(symbol)
-        hist = t.history(period=period)
+        hist = t.history(period=period, timeout=YFINANCE_TIMEOUT_SECONDS)
         if hist.empty or len(hist) < 5:
             return None
         return {
@@ -196,25 +203,45 @@ def run_scan(
     if strategies is None:
         strategies = ["gap", "volume", "breakout"]
 
-    stocks = UNIVERSES.get(universe, NIFTY_50)
+    requested_stocks = UNIVERSES.get(universe, NIFTY_50)
+    stocks = bounded_items(requested_stocks, MAX_SCANNER_STOCKS)
+    strategies = [
+        strategy for strategy in (strategies or ["gap", "volume", "breakout"])
+        if strategy in {"gap", "volume", "breakout"}
+    ][:3]
+    gap_threshold = max(0.01, min(float(gap_threshold), 20.0))
+    volume_multiplier = max(0.01, min(float(volume_multiplier), 20.0))
+    breakout_lookback = max(5, min(int(breakout_lookback), 60))
 
     if on_progress:
-        on_progress(f"Scanning {len(stocks)} stocks from {universe.upper()}...")
+        on_progress(
+            f"Scanning {len(stocks)} of {len(requested_stocks)} stocks "
+            f"from {universe.upper()}..."
+        )
 
     # Fetch data in parallel
     stocks_data = []
     failed = 0
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {executor.submit(_fetch_stock_data, ticker): ticker for ticker in stocks}
-        for i, future in enumerate(as_completed(futures)):
+    executor = get_executor("scanner-worker")
+    futures = {}
+    for ticker in stocks:
+        try:
+            futures[executor.submit(_fetch_stock_data, ticker)] = ticker
+        except ExecutionRejected:
+            failed += 1
+
+    for i, future in enumerate(as_completed(futures)):
+        try:
             result = future.result()
-            if result:
-                stocks_data.append(result)
-            else:
-                failed += 1
-            if on_progress and (i + 1) % 20 == 0:
-                on_progress(f"  Fetched {i + 1}/{len(stocks)} stocks...")
+        except Exception:
+            result = None
+        if result:
+            stocks_data.append(result)
+        else:
+            failed += 1
+        if on_progress and (i + 1) % 20 == 0:
+            on_progress(f"  Fetched {i + 1}/{len(stocks)} stocks...")
 
     if on_progress:
         on_progress(f"Data fetched: {len(stocks_data)} OK, {failed} failed")
@@ -239,6 +266,8 @@ def run_scan(
     return {
         "universe": universe,
         "total_stocks": len(stocks),
+        "requested_stocks": len(requested_stocks),
         "scanned": len(stocks_data),
+        "failed": failed,
         "results": results,
     }

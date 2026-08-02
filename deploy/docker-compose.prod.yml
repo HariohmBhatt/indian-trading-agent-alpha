@@ -14,6 +14,17 @@ services:
     volumes:
       - ${TRADING_AGENT_PROD_DATA_DIR:?Set TRADING_AGENT_PROD_DATA_DIR in the deployment environment}:/data
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+          pids: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
     networks:
       - trading-prod
 
@@ -27,6 +38,17 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+          pids: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
     networks:
       - trading-prod
 
@@ -43,6 +65,17 @@ services:
       - ${CLOUDFLARED_CONFIG_FILE:?Set CLOUDFLARED_CONFIG_FILE in the deployment environment}:/etc/cloudflared/config.yml:ro
       - ${CLOUDFLARED_CREDENTIALS_FILE:?Set CLOUDFLARED_CREDENTIALS_FILE in the deployment environment}:/etc/cloudflared/credentials.json:ro
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+          pids: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
     networks:
       - trading-prod
 

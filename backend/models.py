@@ -1,17 +1,34 @@
 """Pydantic models for the API."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
+from backend.execution import (
+    MAX_ANALYSIS_ANALYSTS,
+    MAX_ANALYSIS_DEBATE_ROUNDS,
+    MAX_ANALYSIS_RISK_ROUNDS,
+)
 
 
 class AnalysisRequest(BaseModel):
-    ticker: str
-    trade_date: str
-    analysts: list[str] = ["market", "social", "news", "fundamentals"]
-    max_debate_rounds: int = 1
-    max_risk_discuss_rounds: int = 1
-    output_language: str = "English"
+    ticker: str = Field(min_length=1, max_length=32)
+    trade_date: str = Field(min_length=10, max_length=10)
+    analysts: list[str] = Field(
+        default_factory=lambda: ["market", "social", "news", "fundamentals"],
+        min_length=1,
+        max_length=MAX_ANALYSIS_ANALYSTS,
+    )
+    max_debate_rounds: int = Field(
+        default=1,
+        ge=1,
+        le=MAX_ANALYSIS_DEBATE_ROUNDS,
+    )
+    max_risk_discuss_rounds: int = Field(
+        default=1,
+        ge=1,
+        le=MAX_ANALYSIS_RISK_ROUNDS,
+    )
+    output_language: str = Field(default="English", max_length=32)
 
 
 class AnalysisResponse(BaseModel):

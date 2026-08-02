@@ -10,8 +10,15 @@ For each stock in the universe:
 import yfinance as yf
 import numpy as np
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from backend.scanner import NIFTY_50, NIFTY_100, BSE_250, UNIVERSES
+from backend.execution import (
+    MAX_RECOMMENDER_STOCKS,
+    YFINANCE_TIMEOUT_SECONDS,
+    ExecutionRejected,
+    bounded_items,
+    get_executor,
+)
 
 
 # Historical win rates (baseline — will be overridden by live performance data if available)
@@ -95,7 +102,7 @@ def _analyze_stock(ticker: str) -> dict | None:
     try:
         symbol = f"{ticker}.NS"
         t = yf.Ticker(symbol)
-        hist = t.history(period="6mo")
+        hist = t.history(period="6mo", timeout=YFINANCE_TIMEOUT_SECONDS)
         if hist.empty or len(hist) < 50:
             return None
 
@@ -447,8 +454,11 @@ def recommend(
     # Refresh learned weight overrides from settings before scoring any stock
     _refresh_active_weights()
 
-    stocks = UNIVERSES.get(universe, NIFTY_100)
+    requested_stocks = UNIVERSES.get(universe, NIFTY_100)
+    stocks = bounded_items(requested_stocks, MAX_RECOMMENDER_STOCKS)
+    min_signals = max(1, min(int(min_signals), 10))
     all_results = []
+    failed = 0
 
     # Fetch FII/DII market bias once (used for all stocks)
     market_bias = None
@@ -479,36 +489,50 @@ def recommend(
         except Exception as e:
             print(f"[Recommender] Concentration check failed: {e}", flush=True)
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {executor.submit(_analyze_stock, ticker): ticker for ticker in stocks}
-        for f in as_completed(futures):
+    executor = get_executor("recommender-worker")
+    futures = {}
+    for ticker in stocks:
+        try:
+            futures[executor.submit(_analyze_stock, ticker)] = ticker
+        except ExecutionRejected:
+            failed += 1
+            continue
+
+    for f in as_completed(futures):
+        try:
             result = f.result()
-            if result and (result["bullish_signal_count"] >= min_signals or result["bearish_signal_count"] >= min_signals):
-                # Apply market bias
-                if market_bias:
-                    result = _apply_market_bias(result, market_bias)
-                # Apply event filter (per-ticker check)
-                if apply_event_filter:
-                    try:
-                        from backend.calendar_data import get_event_filter_for_ticker
-                        event_filter = get_event_filter_for_ticker(result["ticker"], days_ahead=2)
-                        if event_filter.get("has_event"):
-                            result = _apply_event_filter(result, event_filter)
-                    except Exception:
-                        pass
-                # Apply concentration check (per-ticker, only on bullish signals)
-                if apply_concentration_check and result.get("direction") in ("STRONG BUY", "BUY"):
-                    try:
-                        from backend.concentration import check_new_trade_concentration
-                        conc_check = check_new_trade_concentration(
-                            result["ticker"],
-                            proposed_position_value=total_capital * 0.1,  # 10% per position assumed
-                            total_capital=total_capital,
-                        )
-                        result = _apply_concentration_filter(result, conc_check)
-                    except Exception:
-                        pass
-                all_results.append(result)
+        except Exception:
+            failed += 1
+            result = None
+        if result and (
+            result["bullish_signal_count"] >= min_signals
+            or result["bearish_signal_count"] >= min_signals
+        ):
+            # Apply market bias
+            if market_bias:
+                result = _apply_market_bias(result, market_bias)
+            # Apply event filter (per-ticker check)
+            if apply_event_filter:
+                try:
+                    from backend.calendar_data import get_event_filter_for_ticker
+                    event_filter = get_event_filter_for_ticker(result["ticker"], days_ahead=2)
+                    if event_filter.get("has_event"):
+                        result = _apply_event_filter(result, event_filter)
+                except Exception:
+                    pass
+            # Apply concentration check (per-ticker, only on bullish signals)
+            if apply_concentration_check and result.get("direction") in ("STRONG BUY", "BUY"):
+                try:
+                    from backend.concentration import check_new_trade_concentration
+                    conc_check = check_new_trade_concentration(
+                        result["ticker"],
+                        proposed_position_value=total_capital * 0.1,  # 10% per position assumed
+                        total_capital=total_capital,
+                    )
+                    result = _apply_concentration_filter(result, conc_check)
+                except Exception:
+                    pass
+            all_results.append(result)
 
     # Separate by direction and sort
     strong_buys = sorted([r for r in all_results if r["direction"] == "STRONG BUY"], key=lambda x: -x["score"])
@@ -528,6 +552,8 @@ def recommend(
     result = {
         "universe": universe,
         "total_analyzed": len(stocks),
+        "requested_stocks": len(requested_stocks),
+        "failed": failed,
         "total_with_signals": len(all_results),
         "market_bias": market_bias,
         "today_market_events": today_market_events,

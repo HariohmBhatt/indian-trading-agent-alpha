@@ -1,6 +1,6 @@
 """Simulation API — paper trading + historical recommender backtest."""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 from backend.simulation import (
     open_paper_trade,
@@ -16,6 +16,14 @@ from backend.db import (
     get_recommender_backtest,
     list_recommender_backtest_runs,
 )
+from backend.execution import (
+    RECOMMENDER_BACKTEST_TIMEOUT_SECONDS,
+    ExecutionRejected,
+    ExecutionTimeout,
+    InputLimitExceeded,
+    run_with_timeout,
+)
+from backend.observability import log_job_rejected
 
 router = APIRouter(prefix="/api/simulation", tags=["simulation"])
 
@@ -84,17 +92,41 @@ def close_trade(trade_id: int):
 @router.post("/recommender-backtest")
 def run_backtest(
     universe: str = Query("nifty50"),
-    start_date: str | None = Query(None),
-    end_date: str | None = Query(None),
-    interval_days: int = Query(5),
+    start_date: str | None = Query(None, min_length=10, max_length=10),
+    end_date: str | None = Query(None, min_length=10, max_length=10),
+    interval_days: int = Query(5, ge=1, le=20),
 ):
     """Run recommendation engine on historical dates and measure actual outcomes. FREE."""
-    return run_recommender_backtest(
-        universe=universe,
-        start_date=start_date,
-        end_date=end_date,
-        interval_days=interval_days,
-    )
+    try:
+        return run_with_timeout(
+            "recommender-backtest",
+            run_recommender_backtest,
+            universe=universe,
+            start_date=start_date,
+            end_date=end_date,
+            interval_days=interval_days,
+            timeout=RECOMMENDER_BACKTEST_TIMEOUT_SECONDS,
+            metadata={"universe": universe},
+        )
+    except InputLimitExceeded as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="start_date and end_date must use YYYY-MM-DD.",
+        ) from exc
+    except ExecutionRejected as exc:
+        log_job_rejected("recommender-backtest", reason=str(exc))
+        raise HTTPException(
+            status_code=429,
+            detail="Historical recommendation backtest capacity is full; retry later.",
+            headers={"Retry-After": "30"},
+        ) from exc
+    except ExecutionTimeout as exc:
+        raise HTTPException(
+            status_code=504,
+            detail="Historical recommendation backtest exceeded its deadline; retry later.",
+        ) from exc
 
 
 @router.get("/recommender-backtest/{run_id}")

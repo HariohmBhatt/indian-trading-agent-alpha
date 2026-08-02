@@ -5,6 +5,7 @@ import pandas as pd
 import yfinance as yf
 import os
 from .stockstats_utils import StockstatsUtils, _clean_dataframe, yf_retry, load_ohlcv, filter_financials_by_date
+from .config import get_config
 
 def get_YFin_data_online(
     symbol: Annotated[str, "ticker symbol of the company"],
@@ -19,7 +20,14 @@ def get_YFin_data_online(
     ticker = yf.Ticker(symbol.upper())
 
     # Fetch historical data for the specified date range
-    data = yf_retry(lambda: ticker.history(start=start_date, end=end_date))
+    timeout = get_config().get("yfinance_timeout_seconds", 15)
+    data = yf_retry(
+        lambda: ticker.history(
+            start=start_date,
+            end=end_date,
+            timeout=timeout,
+        )
+    )
 
     # Check if data is empty
     if data.empty:
