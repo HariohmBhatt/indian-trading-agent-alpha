@@ -1,5 +1,6 @@
 tunnel: 989090d5-dfd5-4b87-b70a-90d6fe96ae6f
 credentials-file: /etc/cloudflared/credentials.json
+metrics: 0.0.0.0:2000
 
 ingress:
   - hostname: trade.hariohm.in

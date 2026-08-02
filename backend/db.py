@@ -246,6 +246,13 @@ def get_db():
         conn.close()
 
 
+def check_db():
+    """Verify that the configured SQLite database can execute a read."""
+    with get_db() as conn:
+        conn.execute("SELECT 1").fetchone()
+    return True
+
+
 # --- Watchlist ---
 
 def get_watchlist() -> list[dict]:

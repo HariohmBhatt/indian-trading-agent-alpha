@@ -1,5 +1,7 @@
 FROM node:22-bookworm-slim@sha256:f32b81066cde10a75dbac96646099533316d94bac4150c55da1636e1f0ffdc46 AS dependencies
 
+ARG RELEASE_SHA=unknown
+
 WORKDIR /app/frontend
 
 COPY frontend/package.json frontend/package-lock.json ./
@@ -23,6 +25,8 @@ RUN npm run build
 
 FROM node:22-bookworm-slim@sha256:f32b81066cde10a75dbac96646099533316d94bac4150c55da1636e1f0ffdc46 AS production
 
+ARG RELEASE_SHA=unknown
+
 WORKDIR /app
 
 ARG OCI_SOURCE="https://github.com/HariohmBhatt/indian-trading-agent-alpha"
@@ -43,6 +47,6 @@ COPY --from=builder /app/frontend/public ./public
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
-  CMD node -e "fetch('http://127.0.0.1:3000').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
 CMD ["node", "server.js"]

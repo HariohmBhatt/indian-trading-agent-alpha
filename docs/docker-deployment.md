@@ -106,6 +106,47 @@ Docker/Compose and every host path referenced by `compose.env`, validates
 Use `./deploy/deploy.sh --dry-run` with the same two revision variables to run
 all validation without starting or replacing containers.
 
+`deploy/deploy.sh` waits for all of the following gates before promoting a
+release to `last-known-good.json` under `TRADING_AGENT_RELEASE_DIR`:
+
+- Backend `/api/health` is process liveness and `/api/ready` performs a
+  read-only SQLite check.
+- Frontend `/health` is a route-local health response.
+- The Cloudflared container is ready and its host-bound `/ready` and
+  `/metrics` endpoints respond.
+- Backend and frontend runtime/image revision identities match the checked-out
+  release SHA.
+
+The validator does not run public requests by default:
+
+```bash
+./deploy/validate-prod.sh
+```
+
+To run Access-aware public smoke checks, create mode-600 credential files
+outside the repository, set their paths and the public URL in the host-only
+`compose.env`, then opt in:
+
+```bash
+./deploy/validate-prod.sh --public
+```
+
+Credential contents are read through a temporary private curl configuration;
+the scripts never print them. Cloudflared metrics are bound to loopback by
+`CLOUDFLARED_METRICS_PORT`, so they are not public.
+
+Rollback is image-only and defaults to a dry run:
+
+```bash
+./deploy/rollback.sh --dry-run
+./deploy/rollback.sh --apply
+```
+
+Rollback reuses the previous backend/frontend (and, when recorded, Cloudflared)
+content digests without removing the production data directory. It deliberately
+does not restore SQLite files or reverse schema changes; database recovery must
+be handled as a separate, explicitly reviewed operation.
+
 The Cloudflare Tunnel is a container in the production Compose project. Stop
 the old host `cloudflared` service before starting this stack so only the
 Docker connector is active:

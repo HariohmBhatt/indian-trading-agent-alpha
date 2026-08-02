@@ -1,241 +1,108 @@
 #!/usr/bin/env bash
-# Deploy the production Docker stack.
-#
-# GitHub Actions calls this same command on the local self-hosted runner.
-# It is also safe to run manually:
-#
-#   TRADING_AGENT_EXPECTED_REF=refs/heads/prod \
-#   TRADING_AGENT_EXPECTED_SHA="$(git rev-parse HEAD)" \
-#   ./deploy/deploy.sh
-#
-# Runtime secrets and host paths live outside the repository in:
-#   ~/.config/indian-trading-agent/compose.env
-set -euo pipefail
+# Deploy the production Docker stack behind readiness, smoke, and identity
+# gates. A failed deployment is automatically rolled back to the previous
+# last-known-good image manifest when one exists.
+set -Eeuo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/deploy/docker-compose.prod.yml"
 COMPOSE_ENV_FILE="${TRADING_AGENT_COMPOSE_ENV_FILE:-$HOME/.config/indian-trading-agent/compose.env}"
-LOCK_FILE="${TRADING_AGENT_DEPLOY_LOCK_FILE:-/home/hariohm/.config/indian-trading-agent/deploy.lock}"
+source "$ROOT_DIR/deploy/lib.sh"
+
+LOCK_FILE="${TRADING_AGENT_DEPLOY_LOCK_FILE:-}"
 EXPECTED_REF="${TRADING_AGENT_EXPECTED_REF:-}"
 EXPECTED_SHA="${TRADING_AGENT_EXPECTED_SHA:-}"
-
+PUBLIC_CHECK=0
 DRY_RUN=0
 LOCK_ACQUIRED=0
-
-log() { printf '[deploy] %s\n' "$*"; }
-ok() { printf '[ok]     %s\n' "$*"; }
-err() { printf '[err]    %s\n' "$*" >&2; }
+HEALTH_TIMEOUT="${TRADING_AGENT_HEALTH_TIMEOUT:-60}"
 
 usage() {
-  cat <<'EOF'
-Usage: deploy.sh [--dry-run]
-
-Required environment:
-  TRADING_AGENT_EXPECTED_REF  prod or refs/heads/prod
-  TRADING_AGENT_EXPECTED_SHA  full 40-character commit SHA
-
-Optional environment:
-  TRADING_AGENT_COMPOSE_ENV_FILE  host-only Compose env file
-  TRADING_AGENT_DEPLOY_LOCK_FILE  shared host-visible lock file
-EOF
+  printf 'Usage: %s [--dry-run] [--public] [--compose-env-file FILE]\n' "$0"
 }
 
-compose() {
-  docker compose --env-file "$COMPOSE_ENV_FILE" -f "$COMPOSE_FILE" "$@"
-}
-
-trim() {
-  local value=$1
-
-  value="${value#"${value%%[![:space:]]*}"}"
-  value="${value%"${value##*[![:space:]]}"}"
-  printf '%s' "$value"
-}
-
-# Read only the named, non-secret path settings without sourcing the file.
-read_compose_env_value() {
-  local key=$1
-  local line name value
-
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line=$(trim "$line")
-    [[ -z "$line" || ${line:0:1} == "#" ]] && continue
-
-    if [[ "$line" == export[[:space:]]* ]]; then
-      line=$(trim "${line#export}")
-    fi
-    [[ "$line" == *=* ]] || continue
-
-    name=$(trim "${line%%=*}")
-    [[ "$name" == "$key" ]] || continue
-
-    value=$(trim "${line#*=}")
-    case "$value" in
-      \"*\")
-        value=${value#\"}
-        value=${value%\"}
-        ;;
-      \'*\')
-        value=${value#\'}
-        value=${value%\'}
-        ;;
-    esac
-    printf '%s' "$value"
-    return 0
-  done < "$COMPOSE_ENV_FILE"
-
-  return 1
-}
-
-# Match Compose's shell-environment-over-env-file precedence for path values.
-compose_env_value() {
-  local key=$1
-
-  case "$key" in
-    TRADING_AGENT_PROD_ENV_FILE)
-      if [[ -n ${TRADING_AGENT_PROD_ENV_FILE+x} ]]; then
-        printf '%s' "$TRADING_AGENT_PROD_ENV_FILE"
-        return 0
-      fi
+while (($#)); do
+  case "$1" in
+    --dry-run)
+      DRY_RUN=1
+      shift
       ;;
-    TRADING_AGENT_PROD_DATA_DIR)
-      if [[ -n ${TRADING_AGENT_PROD_DATA_DIR+x} ]]; then
-        printf '%s' "$TRADING_AGENT_PROD_DATA_DIR"
-        return 0
-      fi
+    --public)
+      PUBLIC_CHECK=1
+      shift
       ;;
-    CLOUDFLARED_CONFIG_FILE)
-      if [[ -n ${CLOUDFLARED_CONFIG_FILE+x} ]]; then
-        printf '%s' "$CLOUDFLARED_CONFIG_FILE"
-        return 0
-      fi
+    --compose-env-file)
+      [[ $# -ge 2 ]] || die "--compose-env-file requires a path"
+      COMPOSE_ENV_FILE="$2"
+      shift 2
       ;;
-    CLOUDFLARED_CREDENTIALS_FILE)
-      if [[ -n ${CLOUDFLARED_CREDENTIALS_FILE+x} ]]; then
-        printf '%s' "$CLOUDFLARED_CREDENTIALS_FILE"
-        return 0
-      fi
+    -h|--help)
+      usage
+      exit 0
       ;;
     *)
-      err "Unsupported Compose env key: $key"
-      return 1
+      usage >&2
+      die "Unknown option: $1"
       ;;
   esac
+done
 
-  read_compose_env_value "$key"
-}
+[[ "$HEALTH_TIMEOUT" =~ ^[0-9]+$ && "$HEALTH_TIMEOUT" -gt 0 ]] ||
+  die "TRADING_AGENT_HEALTH_TIMEOUT must be a positive integer"
 
 resolve_lock_file() {
   local configured_lock
 
-  if [[ -n ${TRADING_AGENT_DEPLOY_LOCK_FILE+x} ]]; then
-    return 0
-  fi
-  if [[ -r "$COMPOSE_ENV_FILE" ]] \
-    && configured_lock=$(read_compose_env_value TRADING_AGENT_DEPLOY_LOCK_FILE) \
-    && [[ -n "$configured_lock" ]]; then
-    LOCK_FILE=$configured_lock
+  if [[ -z "$LOCK_FILE" ]]; then
+    configured_lock="$(read_compose_env_value TRADING_AGENT_DEPLOY_LOCK_FILE)"
+    LOCK_FILE="${configured_lock:-/home/hariohm/.config/indian-trading-agent/deploy.lock}"
   fi
 }
 
-validate_compose_env_file() {
-  if [[ ! -f "$COMPOSE_ENV_FILE" || ! -r "$COMPOSE_ENV_FILE" ]]; then
-    err "Missing or unreadable Compose env file: $COMPOSE_ENV_FILE"
-    err "Create it from deploy/compose.env.example before deploying."
-    return 1
-  fi
-
-  if [[ ! -f "$COMPOSE_FILE" || ! -r "$COMPOSE_FILE" ]]; then
-    err "Missing or unreadable Compose file: $COMPOSE_FILE"
-    return 1
+configured_compose_value() {
+  local key="$1"
+  if [[ -v "$key" ]]; then
+    printf '%s' "${!key}"
+  else
+    read_compose_env_value "$key"
   fi
 }
 
 validate_referenced_path() {
-  local label=$1
-  local kind=$2
-  local path=$3
+  local label="$1"
+  local kind="$2"
+  local path="$3"
 
-  if [[ -z "$path" ]]; then
-    err "$label is not set in $COMPOSE_ENV_FILE"
-    return 1
-  fi
-  if [[ "$path" != /* ]]; then
-    err "$label must be an absolute host path: $path"
-    return 1
-  fi
+  [[ -n "$path" ]] || die "$label is not set in $COMPOSE_ENV_FILE"
+  [[ "$path" = /* ]] || die "$label must be an absolute host path: $path"
 
   case "$kind" in
     file)
-      if [[ ! -f "$path" || ! -r "$path" ]]; then
-        err "$label does not point to a readable file: $path"
-        return 1
-      fi
+      [[ -f "$path" && -r "$path" ]] ||
+        die "$label does not point to a readable file: $path"
       ;;
     directory)
-      if [[ ! -d "$path" || ! -r "$path" || ! -x "$path" ]]; then
-        err "$label does not point to an accessible directory: $path"
-        return 1
-      fi
+      [[ -d "$path" && -r "$path" && -x "$path" ]] ||
+        die "$label does not point to an accessible directory: $path"
       ;;
     *)
-      err "Unsupported path validation kind: $kind"
-      return 1
+      die "Unsupported path validation kind: $kind"
       ;;
   esac
-
-  ok "Validated $label."
 }
 
 validate_referenced_paths() {
-  local had_error=0
   local key kind label path
-
   while IFS=: read -r key kind label; do
-    if ! path=$(compose_env_value "$key"); then
-      err "$key is not set in $COMPOSE_ENV_FILE"
-      had_error=1
-      continue
-    fi
-    if ! validate_referenced_path "$label" "$kind" "$path"; then
-      had_error=1
-    fi
+    path="$(configured_compose_value "$key")"
+    validate_referenced_path "$label" "$kind" "$path"
   done <<'EOF'
 TRADING_AGENT_PROD_ENV_FILE:file:TRADING_AGENT_PROD_ENV_FILE
 TRADING_AGENT_PROD_DATA_DIR:directory:TRADING_AGENT_PROD_DATA_DIR
 CLOUDFLARED_CONFIG_FILE:file:CLOUDFLARED_CONFIG_FILE
 CLOUDFLARED_CREDENTIALS_FILE:file:CLOUDFLARED_CREDENTIALS_FILE
 EOF
-
-  if (( had_error != 0 )); then
-    return 1
-  fi
-}
-
-validate_docker() {
-  if ! command -v docker >/dev/null 2>&1; then
-    err "Docker is required but was not found on PATH."
-    return 1
-  fi
-  if ! docker compose version >/dev/null 2>&1; then
-    err "Docker Compose v2 is required."
-    return 1
-  fi
-  if ! docker info >/dev/null 2>&1; then
-    err "The Docker daemon is unavailable or the current user cannot access it."
-    return 1
-  fi
-
-  ok "Docker and Docker Compose are available."
-}
-
-validate_compose_config() {
-  if ! compose config --quiet >/dev/null 2>&1; then
-    err "docker compose config rejected the production configuration."
-    return 1
-  fi
-
-  ok "Docker Compose configuration is valid."
 }
 
 validate_immutable_images() {
@@ -243,115 +110,61 @@ validate_immutable_images() {
   local images
 
   images="$(compose config --images)"
-  if [[ -z "$images" ]]; then
-    err "Production Compose configuration contains no images."
-    return 1
-  fi
-
+  [[ -n "$images" ]] || die "Production Compose configuration contains no images"
   while IFS= read -r image; do
-    if [[ ! "$image" =~ @sha256:[0-9a-f]{64}$ ]]; then
-      err "Production image is not digest-qualified: $image"
-      return 1
-    fi
+    [[ "$image" =~ @sha256:[0-9a-f]{64}$ ]] ||
+      die "Production image is not digest-qualified: $image"
   done <<< "$images"
-
-  ok "Validated immutable production image references."
-}
-
-validate_preflight() {
-  validate_compose_env_file || return 1
-  validate_docker || return 1
-  validate_referenced_paths || return 1
-  validate_compose_config || return 1
-  validate_immutable_images || return 1
 }
 
 validate_revision() {
   local actual_ref actual_sha current_branch expected_ref expected_sha
 
-  if [[ -z "$EXPECTED_REF" ]]; then
-    err "TRADING_AGENT_EXPECTED_REF is required and must identify prod."
-    return 1
-  fi
+  [[ -n "$EXPECTED_REF" ]] ||
+    die "TRADING_AGENT_EXPECTED_REF is required and must identify prod"
   case "$EXPECTED_REF" in
     prod|refs/heads/prod)
       expected_ref=refs/heads/prod
       ;;
     *)
-      err "TRADING_AGENT_EXPECTED_REF must be prod or refs/heads/prod: $EXPECTED_REF"
-      return 1
+      die "TRADING_AGENT_EXPECTED_REF must be prod or refs/heads/prod: $EXPECTED_REF"
       ;;
   esac
 
-  if [[ -z "$EXPECTED_SHA" ]]; then
-    err "TRADING_AGENT_EXPECTED_SHA is required."
-    return 1
-  fi
-  if [[ ! "$EXPECTED_SHA" =~ ^[[:xdigit:]]{40}$ ]]; then
-    err "TRADING_AGENT_EXPECTED_SHA must be a full 40-character commit SHA."
-    return 1
-  fi
-  expected_sha=${EXPECTED_SHA,,}
+  [[ "$EXPECTED_SHA" =~ ^[[:xdigit:]]{40}$ ]] ||
+    die "TRADING_AGENT_EXPECTED_SHA must be a full 40-character commit SHA"
+  expected_sha="${EXPECTED_SHA,,}"
 
-  if [[ ${GITHUB_ACTIONS:-} == true ]]; then
-    actual_ref=${GITHUB_REF:-}
-    if [[ -z "$actual_ref" ]]; then
-      err "GITHUB_REF is missing in the GitHub Actions environment."
-      return 1
-    fi
+  if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+    actual_ref="${GITHUB_REF:-}"
+    [[ -n "$actual_ref" ]] || die "GITHUB_REF is missing in GitHub Actions"
   else
-    if ! current_branch=$(git -C "$ROOT_DIR" symbolic-ref --quiet --short HEAD); then
-      err "Manual deployment requires a checked-out branch; detached HEAD is not allowed."
-      return 1
-    fi
+    current_branch="$(git -C "$ROOT_DIR" symbolic-ref --quiet --short HEAD)" ||
+      die "Manual deployment requires a checked-out branch"
     actual_ref="refs/heads/$current_branch"
   fi
+  [[ "$actual_ref" == "$expected_ref" ]] ||
+    die "Expected prod ref $expected_ref but found $actual_ref"
 
-  if [[ "$actual_ref" != "$expected_ref" ]]; then
-    err "Expected prod ref $expected_ref but found $actual_ref."
-    return 1
-  fi
-
-  if ! actual_sha=$(git -C "$ROOT_DIR" rev-parse --verify 'HEAD^{commit}'); then
-    err "Unable to resolve the checked-out commit SHA."
-    return 1
-  fi
-  actual_sha=${actual_sha,,}
-  if [[ "$actual_sha" != "$expected_sha" ]]; then
-    err "Expected prod SHA $expected_sha but found $actual_sha."
-    return 1
-  fi
-
-  ok "Validated prod ref $actual_ref at $actual_sha."
+  actual_sha="$(git -C "$ROOT_DIR" rev-parse --verify 'HEAD^{commit}')"
+  actual_sha="${actual_sha,,}"
+  [[ "$actual_sha" == "$expected_sha" ]] ||
+    die "Expected prod SHA $expected_sha but found $actual_sha"
 }
 
 acquire_deployment_lock() {
   local lock_directory
 
-  if ! command -v flock >/dev/null 2>&1; then
-    err "flock is required for deployment serialization."
-    return 1
-  fi
-
-  lock_directory=$(dirname -- "$LOCK_FILE")
-  if [[ "$LOCK_FILE" != /* ]]; then
-    err "Deployment lock file must be an absolute host path: $LOCK_FILE"
-    return 1
-  fi
-  if [[ ! -d "$lock_directory" ]]; then
-    err "Deployment lock directory does not exist: $lock_directory"
-    return 1
-  fi
-  if ! exec 9>"$LOCK_FILE"; then
-    err "Deployment lock file is not writable: $LOCK_FILE"
-    return 1
-  fi
-  if ! flock -n 9; then
-    err "Another production deployment is already running (lock: $LOCK_FILE)."
-    exec 9>&-
-    return 1
-  fi
-
+  require_command flock
+  [[ "$LOCK_FILE" = /* ]] ||
+    die "Deployment lock file must be an absolute host path: $LOCK_FILE"
+  lock_directory="$(dirname -- "$LOCK_FILE")"
+  [[ -d "$lock_directory" ]] ||
+    die "Deployment lock directory does not exist: $lock_directory"
+  exec 9>"$LOCK_FILE" ||
+    die "Deployment lock file is not writable: $LOCK_FILE"
+  flock -n 9 ||
+    die "Another production deployment is already running (lock: $LOCK_FILE)"
   LOCK_ACQUIRED=1
   log "Acquired deployment lock: $LOCK_FILE"
 }
@@ -364,78 +177,163 @@ release_deployment_lock() {
   fi
 }
 
-deploy_stack() {
-  log "Pulling the immutable production Docker stack..."
-  compose pull
+require_command "$DOCKER_BIN"
+require_command git
+require_command jq
+require_compose_env
+resolve_lock_file
+acquire_deployment_lock
+trap release_deployment_lock EXIT
 
-  log "Starting the production Docker stack..."
-  compose up -d --remove-orphans
+RELEASE_DIR="$(release_dir)"
+ensure_release_dir "$RELEASE_DIR"
 
-  log "Waiting for application health..."
-  for ((attempt = 1; attempt <= 30; attempt++)); do
-    if compose exec -T backend python -c \
-      "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)" \
-      >/dev/null 2>&1 \
-      && compose exec -T frontend node -e \
-      "fetch('http://127.0.0.1:3000').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))" \
-      >/dev/null 2>&1; then
-      ok "Production containers are healthy."
-      compose ps
-      return 0
-    fi
-    if (( attempt == 30 )); then
-      err "Production health checks failed."
-      compose ps
-      compose logs --no-color --tail=100 backend frontend cloudflared || true
-      return 1
-    fi
-    sleep 2
-  done
-}
-
-main() {
-  case "$#" in
-    0)
-      ;;
-    1)
-      case "$1" in
-        --dry-run)
-          DRY_RUN=1
-          ;;
-        --help|-h)
-          usage
-          return 0
-          ;;
-        *)
-          err "Unknown argument: $1"
-          usage >&2
-          return 2
-          ;;
-      esac
-      ;;
-    *)
-      err "Expected no arguments or --dry-run."
-      usage >&2
-      return 2
-      ;;
-  esac
-
-  cd "$ROOT_DIR"
-  resolve_lock_file
-  acquire_deployment_lock || return 1
-  trap release_deployment_lock EXIT
-
-  validate_revision || return 1
-  validate_preflight || return 1
-
-  if (( DRY_RUN == 1 )); then
-    ok "Dry run complete; no production containers were started or replaced."
-    return 0
-  fi
-
-  deploy_stack
-}
-
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  main "$@"
+release_sha="${TRADING_AGENT_RELEASE_SHA:-${GITHUB_SHA:-}}"
+if [[ -z "$release_sha" ]]; then
+  release_sha="$(git -C "$ROOT_DIR" rev-parse HEAD)"
 fi
+require_sha "$release_sha"
+export TRADING_AGENT_RELEASE_SHA="$release_sha"
+validate_revision
+
+last_known_good="$RELEASE_DIR/last-known-good.json"
+if [[ -f "$last_known_good" ]]; then
+  jq -e '.schema_version == 1 and (.release_sha | type == "string") and (.services | type == "object")' \
+    "$last_known_good" >/dev/null ||
+    die "Invalid last-known-good manifest: $last_known_good"
+fi
+
+cd "$ROOT_DIR"
+validate_referenced_paths
+"$DOCKER_BIN" info >/dev/null
+compose config --quiet >/dev/null
+validate_immutable_images
+
+if (( DRY_RUN == 1 )); then
+  ok "Dry run complete; no production containers were started or replaced."
+  exit 0
+fi
+
+automatic_rollback() {
+  if [[ -f "$last_known_good" ]]; then
+    err "Attempting automatic rollback to the last-known-good manifest."
+    if "$ROOT_DIR/deploy/rollback.sh" --apply \
+      --manifest "$last_known_good" \
+      --compose-env-file "$COMPOSE_ENV_FILE"; then
+      ok "Automatic rollback completed; database state was retained."
+    else
+      err "Automatic rollback failed; inspect the stack without changing its data volume."
+    fi
+  else
+    err "No last-known-good manifest exists; no image rollback was attempted."
+  fi
+  compose ps || true
+}
+
+log "Pulling immutable production release $release_sha..."
+if ! compose pull; then
+  err "Production image pull failed before validation."
+  automatic_rollback
+  exit 1
+fi
+
+log "Starting production release $release_sha..."
+if ! compose up -d --remove-orphans; then
+  err "Production stack update failed before validation."
+  automatic_rollback
+  exit 1
+fi
+
+validate_args=(
+  --compose-env-file "$COMPOSE_ENV_FILE"
+  --expected-sha "$release_sha"
+  --quiet
+)
+if (( PUBLIC_CHECK == 1 )); then
+  validate_args+=(--public)
+fi
+
+validated=0
+attempts="$(( (HEALTH_TIMEOUT + 1) / 2 ))"
+log "Waiting for readiness, tunnel, and release identity gates..."
+for ((attempt = 1; attempt <= attempts; attempt++)); do
+  if "$ROOT_DIR/deploy/validate-prod.sh" "${validate_args[@]}"; then
+    validated=1
+    break
+  fi
+  sleep 2
+done
+
+if (( validated == 0 )); then
+  err "Production validation failed for release $release_sha."
+  automatic_rollback
+  exit 1
+fi
+
+service_manifest() {
+  local service="$1"
+  local id image_ref image_digest image_revision
+
+  id="$(container_id "$service")"
+  [[ -n "$id" ]] || die "Cannot identify the running $service container"
+  image_ref="$(docker_inspect --format '{{.Config.Image}}' "$id")"
+  image_digest="$(docker_inspect --format '{{.Image}}' "$id")"
+  [[ "$image_digest" =~ ^sha256:[[:xdigit:]]+$ ]] ||
+    die "$service did not report a content-addressed image identity"
+  image_revision="$(
+    docker_inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$id" 2>/dev/null ||
+      true
+  )"
+  [[ -n "$image_revision" && "$image_revision" != "<no value>" ]] || image_revision="unknown"
+
+  jq -n \
+    --arg image_ref "$image_ref" \
+    --arg image_digest "$image_digest" \
+    --arg image_revision "$image_revision" \
+    '{image_ref: $image_ref, image_digest: $image_digest, image_revision: $image_revision}'
+}
+
+manifest_tmp="$(mktemp "$RELEASE_DIR/.manifest.XXXXXX")"
+trap 'rm -f "${manifest_tmp:-}"' EXIT
+
+backend_json="$(service_manifest backend)"
+frontend_json="$(service_manifest frontend)"
+cloudflared_json="$(service_manifest cloudflared)"
+jq -n \
+  --arg release_sha "$release_sha" \
+  --arg deployed_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+  --arg compose_file "deploy/docker-compose.prod.yml" \
+  --argjson backend "$backend_json" \
+  --argjson frontend "$frontend_json" \
+  --argjson cloudflared "$cloudflared_json" \
+  '{
+    schema_version: 1,
+    release_sha: $release_sha,
+    deployed_at: $deployed_at,
+    compose_file: $compose_file,
+    services: {
+      backend: $backend,
+      frontend: $frontend,
+      cloudflared: $cloudflared
+    }
+  }' >"$manifest_tmp"
+chmod 600 "$manifest_tmp"
+
+atomic_install() {
+  local source="$1"
+  local destination="$2"
+  local temporary="${destination}.tmp.$$"
+  install -m 600 "$source" "$temporary"
+  mv -f "$temporary" "$destination"
+}
+
+history_manifest="$RELEASE_DIR/history/${release_sha}.json"
+atomic_install "$manifest_tmp" "$history_manifest"
+atomic_install "$manifest_tmp" "$RELEASE_DIR/current.json"
+atomic_install "$manifest_tmp" "$last_known_good"
+rm -f "$manifest_tmp"
+trap - EXIT
+
+ok "Production release $release_sha passed all gates."
+ok "Last-known-good manifest retained at $last_known_good"
+compose ps
