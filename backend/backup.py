@@ -327,6 +327,18 @@ class S3BackupTarget:
         kwargs: dict[str, Any] = {}
         if self.endpoint_url:
             kwargs["endpoint_url"] = self.endpoint_url
+            # LocalStack, MinIO, and many other S3-compatible endpoints do
+            # not publish a DNS name for ``bucket.endpoint``.
+            try:
+                from botocore.config import Config
+
+                kwargs["config"] = Config(
+                    s3={"addressing_style": "path"}
+                )
+            except ImportError as exc:
+                raise BackupError(
+                    "botocore is required for custom S3 endpoints"
+                ) from exc
         if self.region_name:
             kwargs["region_name"] = self.region_name
         if self.access_key_id:
