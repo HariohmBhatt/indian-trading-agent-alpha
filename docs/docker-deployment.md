@@ -31,6 +31,7 @@ secrets/data into it:
 
 ```bash
 mkdir -p ~/.config/indian-trading-agent
+touch ~/.config/indian-trading-agent/deploy.lock
 cp deploy/compose.env.example ~/.config/indian-trading-agent/compose.env
 cp .env ~/.config/indian-trading-agent/prod.env
 cp deploy/cloudflared/prod-config.yml \
@@ -40,6 +41,7 @@ cp ~/.cloudflared/989090d5-dfd5-4b87-b70a-90d6fe96ae6f.json \
 chmod 600 ~/.config/indian-trading-agent/prod.env \
   ~/.config/indian-trading-agent/cloudflared-credentials.json
 chmod 644 ~/.config/indian-trading-agent/compose.env
+chmod 664 ~/.config/indian-trading-agent/deploy.lock
 sudo chgrp docker ~/.config/indian-trading-agent/prod.env
 sudo chmod 640 ~/.config/indian-trading-agent/prod.env
 ```
@@ -55,8 +57,16 @@ rsync -a ~/.tradingagents/ ~/.tradingagents-prod/
 Then deploy manually:
 
 ```bash
+TRADING_AGENT_EXPECTED_REF=refs/heads/prod \
+TRADING_AGENT_EXPECTED_SHA="$(git rev-parse HEAD)" \
 ./deploy/deploy.sh
 ```
+
+The deploy script validates that the checked-out commit is on `prod`, checks
+Docker/Compose and every host path referenced by `compose.env`, validates
+`docker compose config`, and holds `deploy.lock` for the complete operation.
+Use `./deploy/deploy.sh --dry-run` with the same two revision variables to run
+all validation without starting or replacing containers.
 
 The Cloudflare Tunnel is a container in the production Compose project. Stop
 the old host `cloudflared` service before starting this stack so only the
@@ -118,8 +128,10 @@ git push origin prod
 ```
 
 GitHub Actions checks out that exact commit on `dellg15`, runs
-`./deploy/deploy.sh`, builds the production images locally, replaces the
-containers, and verifies both health endpoints. A failed health check fails the
+`./deploy/deploy.sh` with the event's `prod` ref and SHA, builds the production
+images locally, replaces the containers, and verifies both health endpoints.
+Manual and runner deployments share the host-visible `deploy.lock`, so only
+one production replacement can run at a time. A failed health check fails the
 workflow and prints the recent container logs, so the deployment can be
 diagnosed before retrying.
 
