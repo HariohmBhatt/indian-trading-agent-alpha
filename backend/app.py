@@ -11,15 +11,16 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
-from backend.db import ensure_db
+from backend import db
 from backend.routers import market_data, analysis, watchlist, backtest, strategies, scanner, performance, recommender, settings as settings_router, news as news_router, simulation as simulation_router, insights as insights_router, fii_dii as fii_dii_router, calendar as calendar_router, concentration as concentration_router, daily_verdict as daily_verdict_router, signal_performance as signal_performance_router, verdict_calibration as verdict_calibration_router, regime as regime_router, confidence_calibration as confidence_calibration_router, shadow_trades as shadow_trades_router, memory as memory_router, kite as kite_router, equity_portfolio as equity_portfolio_router, telegram as telegram_router, positions as positions_router
 from backend.settings_manager import load_api_keys_into_env, apply_llm_config_to_default
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    ensure_db()
+    db.ensure_db()
     # Load API keys from DB (UI takes priority over .env)
     load_api_keys_into_env()
     # Apply saved LLM config to DEFAULT_CONFIG
@@ -82,7 +83,48 @@ app.include_router(positions_router.router)
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "indian-trading-agent"}
+    """Process liveness; intentionally does not touch the database."""
+    return {
+        "status": "ok",
+        "service": "indian-trading-agent",
+        "release_sha": os.getenv("TRADING_AGENT_RELEASE_SHA", "unknown"),
+    }
+
+
+@app.get("/api/health/live", include_in_schema=False)
+def health_live():
+    return health()
+
+
+@app.get("/api/ready")
+def readiness():
+    """Application readiness, including a read against the configured database."""
+    try:
+        db.check_db()
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "not_ready",
+                "ready": False,
+                "service": "indian-trading-agent",
+                "release_sha": os.getenv("TRADING_AGENT_RELEASE_SHA", "unknown"),
+                "checks": {"database": {"status": "failed"}},
+            },
+        )
+
+    return {
+        "status": "ready",
+        "ready": True,
+        "service": "indian-trading-agent",
+        "release_sha": os.getenv("TRADING_AGENT_RELEASE_SHA", "unknown"),
+        "checks": {"database": {"status": "ok"}},
+    }
+
+
+@app.get("/api/health/ready", include_in_schema=False)
+def health_ready():
+    return readiness()
 
 
 @app.get("/api/config")

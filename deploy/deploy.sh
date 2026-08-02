@@ -1,54 +1,185 @@
 #!/usr/bin/env bash
-# Deploy the production Docker stack.
-#
-# GitHub Actions calls this same command on the local self-hosted runner.
-# It is also safe to run manually:
-#
-#   ./deploy/deploy.sh
-#
-# Runtime secrets and host paths live outside the repository in:
-#   ~/.config/indian-trading-agent/compose.env
-set -euo pipefail
+# Deploy the production Docker stack behind readiness, smoke, and identity
+# gates. A failed deployment is automatically rolled back to the previous
+# last-known-good image manifest when one exists.
+set -Eeuo pipefail
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/deploy/docker-compose.prod.yml"
 COMPOSE_ENV_FILE="${TRADING_AGENT_COMPOSE_ENV_FILE:-$HOME/.config/indian-trading-agent/compose.env}"
+source "$ROOT_DIR/deploy/lib.sh"
 
-log() { printf '[deploy] %s\n' "$*"; }
-ok() { printf '[ok]     %s\n' "$*"; }
-err() { printf '[err]    %s\n' "$*" >&2; }
+PUBLIC_CHECK=0
+HEALTH_TIMEOUT="${TRADING_AGENT_HEALTH_TIMEOUT:-60}"
 
-if [[ ! -f "$COMPOSE_ENV_FILE" ]]; then
-  err "Missing $COMPOSE_ENV_FILE"
-  err "Create it from deploy/compose.env.example before deploying."
+usage() {
+  printf 'Usage: %s [--public] [--compose-env-file FILE]\n' "$0"
+}
+
+while (($#)); do
+  case "$1" in
+    --public)
+      PUBLIC_CHECK=1
+      shift
+      ;;
+    --compose-env-file)
+      [[ $# -ge 2 ]] || die "--compose-env-file requires a path"
+      COMPOSE_ENV_FILE="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      die "Unknown option: $1"
+      ;;
+  esac
+done
+
+[[ "$HEALTH_TIMEOUT" =~ ^[0-9]+$ && "$HEALTH_TIMEOUT" -gt 0 ]] ||
+  die "TRADING_AGENT_HEALTH_TIMEOUT must be a positive integer"
+
+require_command "$DOCKER_BIN"
+require_command git
+require_command jq
+require_compose_env
+
+RELEASE_DIR="$(release_dir)"
+ensure_release_dir "$RELEASE_DIR"
+
+release_sha="${TRADING_AGENT_RELEASE_SHA:-${GITHUB_SHA:-}}"
+if [[ -z "$release_sha" ]]; then
+  release_sha="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+fi
+require_sha "$release_sha"
+export TRADING_AGENT_RELEASE_SHA="$release_sha"
+
+last_known_good="$RELEASE_DIR/last-known-good.json"
+if [[ -f "$last_known_good" ]]; then
+  jq -e '.schema_version == 1 and (.release_sha | type == "string") and (.services | type == "object")' \
+    "$last_known_good" >/dev/null ||
+    die "Invalid last-known-good manifest: $last_known_good"
+fi
+
+cd "$ROOT_DIR"
+compose config --quiet >/dev/null
+log "Building and starting production release $release_sha..."
+
+automatic_rollback() {
+  if [[ -f "$last_known_good" ]]; then
+    err "Attempting automatic rollback to the last-known-good manifest."
+    if "$ROOT_DIR/deploy/rollback.sh" --apply \
+      --manifest "$last_known_good" \
+      --compose-env-file "$COMPOSE_ENV_FILE"; then
+      ok "Automatic rollback completed; database state was retained."
+    else
+      err "Automatic rollback failed; inspect the stack without changing its data volume."
+    fi
+  else
+    err "No last-known-good manifest exists; no image rollback was attempted."
+  fi
+  compose ps || true
+}
+
+if ! compose up -d --build --remove-orphans; then
+  err "Production stack update failed before validation."
+  automatic_rollback
   exit 1
 fi
 
-compose() {
-  docker compose --env-file "$COMPOSE_ENV_FILE" -f "$COMPOSE_FILE" "$@"
-}
+validate_args=(
+  --compose-env-file "$COMPOSE_ENV_FILE"
+  --expected-sha "$release_sha"
+  --quiet
+)
+if (( PUBLIC_CHECK == 1 )); then
+  validate_args+=(--public)
+fi
 
-cd "$ROOT_DIR"
-log "Building and starting the production Docker stack..."
-compose up -d --build --remove-orphans
-
-log "Waiting for application health..."
-for attempt in $(seq 1 30); do
-  if compose exec -T backend python -c \
-    "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)" \
-    >/dev/null 2>&1 \
-    && compose exec -T frontend node -e \
-    "fetch('http://127.0.0.1:3000').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))" \
-    >/dev/null 2>&1; then
-    ok "Production containers are healthy."
-    compose ps
-    exit 0
-  fi
-  if [[ "$attempt" == 30 ]]; then
-    err "Production health checks failed."
-    compose ps
-    compose logs --no-color --tail=100 backend frontend cloudflared || true
-    exit 1
+validated=0
+attempts="$(( (HEALTH_TIMEOUT + 1) / 2 ))"
+log "Waiting for readiness, tunnel, and release identity gates..."
+for ((attempt = 1; attempt <= attempts; attempt++)); do
+  if "$ROOT_DIR/deploy/validate-prod.sh" "${validate_args[@]}"; then
+    validated=1
+    break
   fi
   sleep 2
 done
+
+if (( validated == 0 )); then
+  err "Production validation failed for release $release_sha."
+  automatic_rollback
+  exit 1
+fi
+
+service_manifest() {
+  local service="$1"
+  local id image_ref image_digest image_revision
+
+  id="$(container_id "$service")"
+  [[ -n "$id" ]] || die "Cannot identify the running $service container"
+  image_ref="$(docker_inspect --format '{{.Config.Image}}' "$id")"
+  image_digest="$(docker_inspect --format '{{.Image}}' "$id")"
+  [[ "$image_digest" =~ ^sha256:[[:xdigit:]]+$ ]] ||
+    die "$service did not report a content-addressed image identity"
+  image_revision="$(
+    docker_inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$id" 2>/dev/null ||
+      true
+  )"
+  [[ -n "$image_revision" && "$image_revision" != "<no value>" ]] || image_revision="unknown"
+
+  jq -n \
+    --arg image_ref "$image_ref" \
+    --arg image_digest "$image_digest" \
+    --arg image_revision "$image_revision" \
+    '{image_ref: $image_ref, image_digest: $image_digest, image_revision: $image_revision}'
+}
+
+manifest_tmp="$(mktemp "$RELEASE_DIR/.manifest.XXXXXX")"
+trap 'rm -f "${manifest_tmp:-}"' EXIT
+
+backend_json="$(service_manifest backend)"
+frontend_json="$(service_manifest frontend)"
+cloudflared_json="$(service_manifest cloudflared)"
+jq -n \
+  --arg release_sha "$release_sha" \
+  --arg deployed_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+  --arg compose_file "deploy/docker-compose.prod.yml" \
+  --argjson backend "$backend_json" \
+  --argjson frontend "$frontend_json" \
+  --argjson cloudflared "$cloudflared_json" \
+  '{
+    schema_version: 1,
+    release_sha: $release_sha,
+    deployed_at: $deployed_at,
+    compose_file: $compose_file,
+    services: {
+      backend: $backend,
+      frontend: $frontend,
+      cloudflared: $cloudflared
+    }
+  }' >"$manifest_tmp"
+chmod 600 "$manifest_tmp"
+
+atomic_install() {
+  local source="$1"
+  local destination="$2"
+  local temporary="${destination}.tmp.$$"
+  install -m 600 "$source" "$temporary"
+  mv -f "$temporary" "$destination"
+}
+
+history_manifest="$RELEASE_DIR/history/${release_sha}.json"
+atomic_install "$manifest_tmp" "$history_manifest"
+atomic_install "$manifest_tmp" "$RELEASE_DIR/current.json"
+atomic_install "$manifest_tmp" "$last_known_good"
+rm -f "$manifest_tmp"
+trap - EXIT
+
+ok "Production release $release_sha passed all gates."
+ok "Last-known-good manifest retained at $last_known_good"
+compose ps
