@@ -12,7 +12,10 @@ services:
       RUNNER_LABELS: ${RUNNER_LABELS:-trading-agent-prod}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /home/hariohm/.config/indian-trading-agent:/home/hariohm/.config/indian-trading-agent:ro
+      # The runner only reads these files while composing the production stack.
+      # Host-side bind sources (data and Cloudflare files) stay invisible here.
+      - /home/hariohm/.config/indian-trading-agent/compose.env:/home/hariohm/.config/indian-trading-agent/compose.env:ro
+      - /home/hariohm/.config/indian-trading-agent/prod.env:/home/hariohm/.config/indian-trading-agent/prod.env:ro
       - indian-trading-agent-runner-config:/opt/actions-runner
       - indian-trading-agent-runner-work:/home/runner/_work
     restart: unless-stopped
