@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS dependencies
+FROM node:22-bookworm-slim@sha256:f32b81066cde10a75dbac96646099533316d94bac4150c55da1636e1f0ffdc46 AS dependencies
 
 WORKDIR /app/frontend
 
@@ -21,9 +21,15 @@ FROM dependencies AS builder
 COPY frontend ./
 RUN npm run build
 
-FROM node:22-bookworm-slim AS production
+FROM node:22-bookworm-slim@sha256:f32b81066cde10a75dbac96646099533316d94bac4150c55da1636e1f0ffdc46 AS production
 
 WORKDIR /app
+
+ARG OCI_SOURCE="https://github.com/HariohmBhatt/indian-trading-agent-alpha"
+ARG OCI_REVISION="local"
+
+LABEL org.opencontainers.image.source="${OCI_SOURCE}" \
+      org.opencontainers.image.revision="${OCI_REVISION}"
 
 ENV NEXT_TELEMETRY_DISABLED=1 \
     NODE_ENV=production \

@@ -1,4 +1,10 @@
-FROM python:3.12-slim AS base
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS base
+
+ARG OCI_SOURCE="https://github.com/HariohmBhatt/indian-trading-agent-alpha"
+ARG OCI_REVISION="local"
+
+LABEL org.opencontainers.image.source="${OCI_SOURCE}" \
+      org.opencontainers.image.revision="${OCI_REVISION}"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -7,12 +13,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml README.md LICENSE NOTICE ./
+COPY pyproject.toml requirements.lock README.md LICENSE NOTICE ./
 COPY tradingagents ./tradingagents
 COPY cli ./cli
 
-RUN python -m pip install --upgrade pip \
-    && python -m pip install .
+RUN python -m pip install --no-cache-dir --require-hashes -r requirements.lock \
+    && python -m pip install --no-cache-dir --no-deps --no-build-isolation .
 
 COPY backend ./backend
 COPY main.py ./

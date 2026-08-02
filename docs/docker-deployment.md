@@ -6,9 +6,9 @@ The repository has two isolated Docker Compose projects:
 - `deploy/docker-compose.prod.yml` — production behind the Cloudflare Tunnel at `https://trade.hariohm.in`
 
 Both projects build the same source with different Docker targets. Development
-bind-mounts source code and runs Next.js/FastAPI reloaders. Production runs
-immutable application images, separate persistent data, and `restart:
-unless-stopped`.
+bind-mounts source code and runs Next.js/FastAPI reloaders. Production consumes
+digest-qualified application images from GHCR, uses a pinned Cloudflare
+connector, keeps separate persistent data, and uses `restart: unless-stopped`.
 
 ## Local development
 
@@ -55,8 +55,13 @@ rsync -a ~/.tradingagents/ ~/.tradingagents-prod/
 Then deploy manually:
 
 ```bash
+export TRADING_AGENT_PROD_BACKEND_IMAGE='ghcr.io/OWNER/REPOSITORY/backend@sha256:DIGEST'
+export TRADING_AGENT_PROD_FRONTEND_IMAGE='ghcr.io/OWNER/REPOSITORY/frontend@sha256:DIGEST'
 ./deploy/deploy.sh
 ```
+
+Both application references must include the full 64-character manifest digest.
+The deployment script rejects mutable image tags before it pulls anything.
 
 The Cloudflare Tunnel is a container in the production Compose project. Stop
 the old host `cloudflared` service before starting this stack so only the
@@ -86,10 +91,10 @@ start automatically.
 
 ## GitHub Actions deployment
 
-The workflow `.github/workflows/deploy-prod.yml` runs on every push to the
-`prod` branch. It uses a repository-level self-hosted runner on `dellg15`, so
-the build and deployment happen on the local machine. Nothing is deployed to
-GitHub-hosted infrastructure.
+The workflow `.github/workflows/deploy-prod.yml` validates pull requests without
+pushing images. On every push to the `prod` branch it builds the backend and
+frontend once on a GitHub-hosted runner, publishes them to GHCR, and passes their
+immutable digests to the repository-level self-hosted runner on `dellg15`.
 
 The runner itself is Dockerized and uses the host Docker socket only to create
 the production containers:
@@ -117,11 +122,12 @@ git merge main
 git push origin prod
 ```
 
-GitHub Actions checks out that exact commit on `dellg15`, runs
-`./deploy/deploy.sh`, builds the production images locally, replaces the
-containers, and verifies both health endpoints. A failed health check fails the
-workflow and prints the recent container logs, so the deployment can be
-diagnosed before retrying.
+GitHub Actions builds and publishes the application images once, then checks out
+that exact commit on `dellg15`, runs `./deploy/deploy.sh` with the two
+digest-qualified GHCR references, replaces the containers without rebuilding,
+and verifies both health endpoints. A failed health check fails the workflow
+and prints the recent container logs, so the deployment can be diagnosed before
+retrying.
 
 ## Persistent state
 

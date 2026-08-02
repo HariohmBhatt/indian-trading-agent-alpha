@@ -1,4 +1,12 @@
-FROM ubuntu:24.04
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
+
+ARG RUNNER_VERSION=2.336.0
+ARG RUNNER_SHA256=04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d
+ARG OCI_SOURCE="https://github.com/HariohmBhatt/indian-trading-agent-alpha"
+ARG OCI_REVISION="local"
+
+LABEL org.opencontainers.image.source="${OCI_SOURCE}" \
+      org.opencontainers.image.revision="${OCI_REVISION}"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     RUNNER_HOME=/home/runner \
@@ -14,7 +22,6 @@ RUN apt-get update \
         docker.io \
         docker-compose-v2 \
         git \
-        jq \
         libicu74 \
         libkrb5-3 \
         libssl3 \
@@ -30,10 +37,12 @@ RUN useradd --create-home --shell /bin/bash runner \
 
 WORKDIR $RUNNER_DIR
 
-RUN runner_version="$(curl -fsSL https://api.github.com/repos/actions/runner/releases/latest | jq -r '.tag_name | ltrimstr("v")')" \
-    && test -n "$runner_version" \
-    && curl -fsSL "https://github.com/actions/runner/releases/download/v${runner_version}/actions-runner-linux-x64-${runner_version}.tar.gz" \
-      | tar -xz --strip-components=0 \
+RUN curl --fail --location --silent --show-error \
+      --output /tmp/actions-runner.tar.gz \
+      "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
+    && echo "${RUNNER_SHA256}  /tmp/actions-runner.tar.gz" | sha256sum --check --strict \
+    && tar -xzf /tmp/actions-runner.tar.gz --strip-components=0 \
+    && rm -f /tmp/actions-runner.tar.gz \
     && chown -R runner:runner "$RUNNER_DIR"
 
 COPY entrypoint.sh /entrypoint.sh

@@ -28,9 +28,33 @@ compose() {
   docker compose --env-file "$COMPOSE_ENV_FILE" -f "$COMPOSE_FILE" "$@"
 }
 
+validate_immutable_images() {
+  local image
+  local images
+
+  images="$(compose config --images)"
+  if [[ -z "$images" ]]; then
+    err "Production Compose configuration contains no images."
+    exit 1
+  fi
+
+  while IFS= read -r image; do
+    if [[ ! "$image" =~ @sha256:[0-9a-f]{64}$ ]]; then
+      err "Production image is not digest-qualified: $image"
+      exit 1
+    fi
+  done <<< "$images"
+}
+
 cd "$ROOT_DIR"
-log "Building and starting the production Docker stack..."
-compose up -d --build --remove-orphans
+log "Validating immutable production image references..."
+validate_immutable_images
+
+log "Pulling the immutable production Docker stack..."
+compose pull
+
+log "Starting the production Docker stack..."
+compose up -d --remove-orphans
 
 log "Waiting for application health..."
 for attempt in $(seq 1 30); do
