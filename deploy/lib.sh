@@ -74,6 +74,7 @@ release_dir() {
 
 ensure_release_dir() {
   local dir="$1"
+  [[ "$dir" = /* ]] || die "Release manifests must use an absolute host path: $dir"
   case "$dir" in
     "$ROOT_DIR"|"$ROOT_DIR"/*)
       die "Release manifests must live outside the repository: $dir"
