@@ -41,6 +41,12 @@ case "${1:-}" in
     case " $* " in
       *" version "*) exit 0 ;;
       *" config --quiet "*) exit 0 ;;
+      *" config --images "*)
+        printf 'ghcr.io/example/backend@sha256:%064d\n' 0
+        printf 'ghcr.io/example/frontend@sha256:%064d\n' 1
+        printf 'cloudflare/cloudflared@sha256:%064d\n' 2
+        exit 0
+        ;;
       *" up "*) exit 42 ;;
     esac
     ;;

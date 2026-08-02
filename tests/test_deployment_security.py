@@ -79,6 +79,7 @@ class ComposeSecurityTests(unittest.TestCase):
                 "/var/run/docker.sock",
                 f"{CONFIG_DIR}/compose.env",
                 f"{CONFIG_DIR}/prod.env",
+                f"{CONFIG_DIR}/deploy.lock",
             },
         )
         self.assertNotIn(CONFIG_DIR, binds)

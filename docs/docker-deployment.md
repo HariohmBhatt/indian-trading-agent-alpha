@@ -246,9 +246,10 @@ docker compose \
 
 ## GitHub Actions deployment
 
-The workflow `.github/workflows/deploy-prod.yml` validates pull requests without
-pushing images. On every push to the `prod` branch it builds the backend and
-frontend once on a GitHub-hosted runner, publishes them to GHCR, and passes their
+Pull requests use the non-deploying `.github/workflows/test-python.yml` gate.
+The workflow `.github/workflows/deploy-prod.yml` validates release inputs on
+pushes to `prod` and manual dispatches, then builds the backend and frontend
+once on a GitHub-hosted runner, publishes them to GHCR, and passes their
 immutable digests to the repository-level self-hosted runner on `dellg15`.
 
 The runner itself is Dockerized and mounts the raw host Docker socket. That
