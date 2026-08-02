@@ -338,3 +338,32 @@ memories, and database history isolated between the two environments.
 The production database and data directory are external state, not tracked
 files. A code release or rollback does not change them. Restore them only from
 an authorized, tested backup.
+
+## Recovery and release acceptance
+
+The release commands above are production mutations. Do not use them as an
+acceptance test. Run the read-only Phase 10 checklist first:
+
+```bash
+./scripts/phase10-recovery-acceptance.sh
+```
+
+The checklist is based on the files present on the current branch. It reports
+the immutable-artifact, scheduled-backup, readiness, and other prerequisite
+controls as `DEFERRED` when their prerequisite changes have not merged; it
+does not infer those controls from local branches.
+
+For the complete operator criteria, disposable-host restore drill, backup
+freshness gate, GHCR digest/provenance procedure, public tunnel validation,
+runner recovery, rollback dry run, and RTO/RPO targets, see
+[`docs/recovery-acceptance.md`](recovery-acceptance.md).
+
+The acceptance commands never read the production data directory, create the
+host-only env files, push or retag images, restart a runner, or run
+`docker compose up`. A restore copy must be explicitly directed to a new
+disposable path with `--apply` and `--i-understand-disposable`; otherwise the
+archive is checked in a temporary directory only.
+
+Before any production push to `prod`, confirm that the release record contains
+the accepted image digest, backup/restore evidence, public health evidence,
+runner evidence, rollback evidence, and an explicit list of deferred checks.
