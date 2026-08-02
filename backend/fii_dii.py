@@ -15,7 +15,7 @@ import requests
 import time
 from datetime import datetime, date, timedelta
 from typing import Optional
-from backend.db import get_db
+from backend.db import ensure_db, get_db
 
 
 # Headers that mimic a real browser (NSE blocks most requests without these)
@@ -30,21 +30,9 @@ NSE_HEADERS = {
 
 
 def _ensure_table():
-    """Create fii_dii_history table if it doesn't exist."""
-    with get_db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS fii_dii_history (
-                date TEXT PRIMARY KEY,
-                fii_buy REAL,
-                fii_sell REAL,
-                fii_net REAL,
-                dii_buy REAL,
-                dii_sell REAL,
-                dii_net REAL,
-                source TEXT,
-                fetched_at TEXT DEFAULT (datetime('now'))
-            )
-        """)
+    """Compatibility wrapper; schema DDL belongs to versioned migrations."""
+
+    return ensure_db()
 
 
 def _get_nse_session() -> requests.Session:

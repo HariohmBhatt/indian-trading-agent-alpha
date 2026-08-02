@@ -24,7 +24,7 @@ import yfinance as yf
 from datetime import datetime, date, timedelta
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from backend.db import get_db
+from backend.db import ensure_db, get_db
 from tradingagents.utils.ticker import normalize_ticker
 
 
@@ -141,17 +141,9 @@ def get_market_events_in_range(start_date: date, end_date: date) -> list[dict]:
 # ============================================================
 
 def _ensure_table():
-    with get_db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS earnings_calendar (
-                ticker TEXT NOT NULL,
-                event_date TEXT NOT NULL,
-                event_type TEXT DEFAULT 'earnings',
-                description TEXT,
-                fetched_at TEXT DEFAULT (datetime('now')),
-                PRIMARY KEY (ticker, event_date, event_type)
-            )
-        """)
+    """Compatibility wrapper; schema DDL belongs to versioned migrations."""
+
+    return ensure_db()
 
 
 def fetch_earnings_for_ticker(ticker: str) -> Optional[dict]:

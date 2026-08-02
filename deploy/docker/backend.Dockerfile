@@ -25,6 +25,7 @@ RUN python -m pip install --no-cache-dir --require-hashes -r requirements.lock \
     && python -m pip install --no-cache-dir --no-deps --no-build-isolation .
 
 COPY backend ./backend
+COPY scripts ./scripts
 COPY main.py ./
 
 RUN mkdir -p /data

@@ -230,6 +230,12 @@ automatic_rollback() {
   compose ps || true
 }
 
+cd "$ROOT_DIR"
+require_command python
+log "Validating production data path, database integrity, and backup target..."
+python "$ROOT_DIR/scripts/deployment_preflight.py" \
+  --compose-env-file "$COMPOSE_ENV_FILE"
+
 log "Pulling immutable production release $release_sha..."
 if ! compose pull; then
   err "Production image pull failed before validation."
@@ -237,9 +243,27 @@ if ! compose pull; then
   exit 1
 fi
 
-log "Starting production release $release_sha..."
+log "Creating an online, encrypted, versioned database backup..."
+if ! compose run --rm --no-deps backend \
+    python /app/scripts/db_backup.py --s3; then
+  err "Production database backup failed; services were not replaced."
+  exit 1
+fi
+
+log "Stopping ingress and application services before migration..."
+compose stop cloudflared frontend backend
+
+log "Applying transactional database migrations..."
+if ! compose run --rm --no-deps backend \
+    python /app/scripts/db_migrate.py; then
+  err "Production database migration failed."
+  automatic_rollback
+  exit 1
+fi
+
+log "Replacing the production services..."
 if ! compose up -d --remove-orphans; then
-  err "Production stack update failed before validation."
+  err "Production stack update failed after migration."
   automatic_rollback
   exit 1
 fi
