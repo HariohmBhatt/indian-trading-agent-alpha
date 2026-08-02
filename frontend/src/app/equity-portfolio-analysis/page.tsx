@@ -3,7 +3,6 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
-  getEquityHoldings,
   getEquityPortfolioReviewHistory,
   getKiteLoginUrl,
   getKiteStatus,
@@ -16,6 +15,7 @@ import {
   sendTelegramTest,
   saveKiteCredentials,
 } from "@/lib/api";
+import { PositionsPanel } from "@/components/portfolio/PositionsPanel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,7 +30,6 @@ import {
   Loader2,
   LogOut,
   PieChart,
-  RefreshCw,
   ShieldCheck,
   Send,
   TrendingDown,
@@ -116,11 +115,6 @@ type LatestReviewResponse = {
 
 type ReviewHistoryResponse = {
   reviews: Review[];
-};
-
-type HoldingsResponse = {
-  holdings: Holding[];
-  count: number;
 };
 
 function errorMessage(error: unknown, fallback: string) {
@@ -306,7 +300,6 @@ function EquityPortfolioAnalysisContent() {
   const [latest, setLatest] = useState<LatestReviewResponse | null>(null);
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null);
   const [history, setHistory] = useState<Review[]>([]);
-  const [holdings, setHoldings] = useState<Holding[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
@@ -372,23 +365,11 @@ function EquityPortfolioAnalysisContent() {
     }
   };
 
-  const refreshHoldings = async () => {
-    try {
-      const result = await getEquityHoldings() as HoldingsResponse;
-      setHoldings(result.holdings || []);
-      toast.success(`Fetched ${result.count || 0} holdings`);
-    } catch (e: unknown) {
-      toast.error(errorMessage(e, "Failed to fetch holdings"));
-      load();
-    }
-  };
-
   const runReview = async () => {
     setRunning(true);
     try {
       const review = await runEquityPortfolioReview() as Review;
       setLatest({ found: true, review });
-      setHoldings(review.holdings || []);
       await load();
       toast.success("Equity portfolio review saved");
     } catch (e: unknown) {
@@ -449,9 +430,8 @@ function EquityPortfolioAnalysisContent() {
   };
 
   const visibleHoldings = useMemo(() => {
-    if (holdings.length) return holdings;
     return latestReview?.holdings || [];
-  }, [holdings, latestReview]);
+  }, [latestReview]);
   const topWinners = latestReview?.summary?.top_winners || [];
   const topLosers = latestReview?.summary?.top_losers || [];
 
@@ -478,9 +458,6 @@ function EquityPortfolioAnalysisContent() {
         <div className="flex flex-wrap gap-2">
           {status?.connected_today && (
             <>
-              <Button variant="outline" size="sm" onClick={refreshHoldings}>
-                <RefreshCw className="h-3 w-3 mr-1" /> Refresh Holdings
-              </Button>
               <Button size="sm" onClick={runReview} disabled={running}>
                 {running ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <ShieldCheck className="h-3 w-3 mr-1" />}
                 Run Review
@@ -547,6 +524,8 @@ function EquityPortfolioAnalysisContent() {
           </CardContent>
         </Card>
       )}
+
+      <PositionsPanel kiteConnected={!!status?.connected_today} />
 
       <Card>
         <CardHeader>

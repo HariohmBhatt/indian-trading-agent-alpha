@@ -1,6 +1,8 @@
 /** Resolve backend URL from the page hostname so remote access works without a rebuild. */
 function getApiBase(): string {
   if (typeof window !== "undefined" && window.location.hostname) {
+    // Over HTTPS (e.g. Cloudflare Tunnel) the reverse proxy routes /api/* to the backend.
+    if (window.location.protocol === "https:") return window.location.origin;
     return `http://${window.location.hostname}:8000`;
   }
   return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -81,6 +83,26 @@ export const saveTelegramSettings = (data: { bot_token: string; chat_id: string;
 export const deleteTelegramSettings = () => fetchAPI(`/api/telegram/settings`, { method: "DELETE" });
 export const sendTelegramTest = (text?: string) =>
   fetchAPI(`/api/telegram/test`, { method: "POST", body: JSON.stringify({ text: text || null }) });
+
+// Positions (local store, synced from Kite on demand)
+export const getPositions = () => fetchAPI(`/api/positions`);
+export const syncPositions = () => fetchAPI(`/api/positions/sync`, { method: "POST" });
+export const addPosition = (data: {
+  tradingsymbol: string;
+  exchange?: string;
+  quantity: number;
+  average_price: number;
+  last_price?: number | null;
+  notes?: string | null;
+}) => fetchAPI(`/api/positions`, { method: "POST", body: JSON.stringify(data) });
+export const updatePosition = (exchange: string, symbol: string, data: {
+  quantity?: number;
+  average_price?: number;
+  last_price?: number | null;
+  notes?: string | null;
+}) => fetchAPI(`/api/positions/${exchange}/${symbol}`, { method: "PUT", body: JSON.stringify(data) });
+export const deletePosition = (exchange: string, symbol: string) =>
+  fetchAPI(`/api/positions/${exchange}/${symbol}`, { method: "DELETE" });
 
 // Settings — API Keys & LLM Config
 export const getApiKeys = () => fetchAPI(`/api/settings/api-keys`);

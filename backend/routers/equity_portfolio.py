@@ -1,14 +1,15 @@
-"""Equity portfolio review routes backed by Kite holdings."""
+"""Equity portfolio review routes backed by the local positions store."""
 
 from fastapi import APIRouter, HTTPException, Query
 
-from backend.brokers.kite import KiteAuthExpired, KiteConfigError, fetch_equity_holdings
+from backend.brokers.kite import KiteAuthExpired, KiteConfigError, fetch_equity_holdings, get_kite_status
 from backend.db import (
     get_equity_portfolio_review,
     get_latest_equity_portfolio_review,
     list_equity_portfolio_reviews,
 )
 from backend.equity_portfolio import create_and_save_review
+from backend.positions import get_positions_view, sync_positions_from_kite
 from backend.notifications.telegram import (
     TelegramConfigError,
     TelegramSendError,
@@ -39,8 +40,23 @@ def _notification_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail=str(exc))
 
 
+def _positions_for_review() -> list[dict]:
+    """Local positions are the source of truth for reviews.
+
+    If Kite is connected for today, do a best-effort sync first so the review
+    reflects the latest holdings; sync failures fall back to the local store.
+    """
+    try:
+        if get_kite_status().get("connected_today"):
+            sync_positions_from_kite()
+    except Exception:
+        pass
+    return get_positions_view()["positions"]
+
+
 @router.get("/holdings")
 def holdings():
+    """Live Kite holdings (diagnostic — the portfolio view uses /api/positions)."""
     try:
         data = fetch_equity_holdings()
         return {"holdings": data, "count": len(data)}
@@ -51,8 +67,12 @@ def holdings():
 @router.post("/reviews")
 def create_review():
     try:
-        holdings_data = fetch_equity_holdings()
-        return create_and_save_review(holdings_data, enrich=True)
+        positions = _positions_for_review()
+        if not positions:
+            raise KiteConfigError(
+                "No positions stored. Sync from Kite or add positions manually first."
+            )
+        return create_and_save_review(positions, enrich=True)
     except Exception as exc:
         raise _kite_error(exc)
 
@@ -99,8 +119,10 @@ def send_latest_review_to_telegram():
 @router.post("/reviews/run-and-send-telegram")
 def run_review_and_send_telegram():
     try:
-        holdings_data = fetch_equity_holdings()
-        review = create_and_save_review(holdings_data, enrich=True)
+        positions = _positions_for_review()
+        if not positions:
+            raise KiteConfigError("No positions stored and Kite is not connected for today")
+        review = create_and_save_review(positions, enrich=True)
         sent = _send_review(review)
         return {"status": "review_sent", "review": review, "telegram": sent}
     except (KiteConfigError, KiteAuthExpired) as exc:

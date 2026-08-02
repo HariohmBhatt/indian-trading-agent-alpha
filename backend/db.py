@@ -198,6 +198,33 @@ def ensure_db():
                 created_at TEXT DEFAULT (datetime('now')),
                 updated_at TEXT DEFAULT (datetime('now'))
             );
+
+            -- Local positions store: source of truth for the portfolio view.
+            -- Rows are updated on-demand via Kite sync (source='kite') or
+            -- maintained manually (source='manual'). Manual rows are never
+            -- touched by Kite sync.
+            CREATE TABLE IF NOT EXISTS positions (
+                tradingsymbol TEXT NOT NULL,
+                exchange TEXT NOT NULL DEFAULT 'NSE',
+                isin TEXT,
+                product TEXT,
+                quantity REAL NOT NULL DEFAULT 0,
+                t1_quantity REAL DEFAULT 0,
+                average_price REAL NOT NULL DEFAULT 0,
+                last_price REAL,
+                close_price REAL,
+                invested_value REAL,
+                current_value REAL,
+                pnl REAL,
+                pnl_pct REAL,
+                day_change REAL,
+                day_change_pct REAL,
+                source TEXT NOT NULL DEFAULT 'manual',
+                notes TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (tradingsymbol, exchange)
+            );
         """)
 
 
@@ -647,3 +674,130 @@ def list_recommender_backtest_runs() -> list[dict]:
                ORDER BY MAX(created_at) DESC"""
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# --- Positions (local store, synced from Kite on demand) ---
+
+POSITION_FIELDS = (
+    "tradingsymbol", "exchange", "isin", "product", "quantity", "t1_quantity",
+    "average_price", "last_price", "close_price", "invested_value", "current_value",
+    "pnl", "pnl_pct", "day_change", "day_change_pct", "source", "notes",
+)
+
+
+def list_positions(source: str | None = None) -> list[dict]:
+    with get_db() as conn:
+        if source:
+            rows = conn.execute(
+                "SELECT * FROM positions WHERE source = ? ORDER BY current_value DESC",
+                (source,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM positions ORDER BY current_value DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_position(tradingsymbol: str, exchange: str = "NSE") -> dict | None:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM positions WHERE tradingsymbol = ? AND exchange = ?",
+            (tradingsymbol.upper(), exchange.upper()),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def upsert_position(data: dict):
+    """Insert or update a position. Derived values are computed by the caller."""
+    symbol = (data.get("tradingsymbol") or "").upper()
+    exchange = (data.get("exchange") or "NSE").upper()
+    if not symbol:
+        raise ValueError("tradingsymbol is required")
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO positions
+            (tradingsymbol, exchange, isin, product, quantity, t1_quantity,
+             average_price, last_price, close_price, invested_value, current_value,
+             pnl, pnl_pct, day_change, day_change_pct, source, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tradingsymbol, exchange) DO UPDATE SET
+                isin = COALESCE(excluded.isin, isin),
+                product = COALESCE(excluded.product, product),
+                quantity = excluded.quantity,
+                t1_quantity = excluded.t1_quantity,
+                average_price = excluded.average_price,
+                last_price = excluded.last_price,
+                close_price = excluded.close_price,
+                invested_value = excluded.invested_value,
+                current_value = excluded.current_value,
+                pnl = excluded.pnl,
+                pnl_pct = excluded.pnl_pct,
+                day_change = excluded.day_change,
+                day_change_pct = excluded.day_change_pct,
+                source = excluded.source,
+                notes = COALESCE(excluded.notes, notes),
+                updated_at = datetime('now')""",
+            (
+                symbol,
+                exchange,
+                data.get("isin"),
+                data.get("product"),
+                data.get("quantity", 0),
+                data.get("t1_quantity", 0),
+                data.get("average_price", 0),
+                data.get("last_price"),
+                data.get("close_price"),
+                data.get("invested_value"),
+                data.get("current_value"),
+                data.get("pnl"),
+                data.get("pnl_pct"),
+                data.get("day_change"),
+                data.get("day_change_pct"),
+                data.get("source", "manual"),
+                data.get("notes"),
+            ),
+        )
+
+
+def replace_kite_positions(rows: list[dict]) -> dict:
+    """Sync Kite holdings into the local store.
+
+    Upserts every Kite row and deletes kite-sourced rows that are no longer
+    present in Kite (i.e. fully exited positions). Manual rows are untouched.
+    Returns counts for the sync summary.
+    """
+    ensure_db()
+    symbols = {(r.get("tradingsymbol") or "").upper() for r in rows}
+    with get_db() as conn:
+        existing = {
+            r["tradingsymbol"].upper()
+            for r in conn.execute("SELECT tradingsymbol FROM positions WHERE source = 'kite'").fetchall()
+        }
+    added = len(symbols - existing)
+    updated = len(symbols & existing)
+    removed = len(existing - symbols)
+
+    for row in rows:
+        upsert_position({**row, "source": "kite"})
+
+    if removed:
+        with get_db() as conn:
+            if symbols:
+                placeholders = ",".join("?" * len(symbols))
+                conn.execute(
+                    f"DELETE FROM positions WHERE source = 'kite' AND tradingsymbol NOT IN ({placeholders})",
+                    tuple(sorted(symbols)),
+                )
+            else:
+                conn.execute("DELETE FROM positions WHERE source = 'kite'")
+    return {"added": added, "updated": updated, "removed": removed, "total": len(rows)}
+
+
+def delete_position(tradingsymbol: str, exchange: str = "NSE") -> bool:
+    with get_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM positions WHERE tradingsymbol = ? AND exchange = ?",
+            (tradingsymbol.upper(), exchange.upper()),
+        )
+        return cursor.rowcount > 0
