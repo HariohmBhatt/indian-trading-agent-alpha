@@ -12,7 +12,10 @@ services:
       RUNNER_LABELS: ${RUNNER_LABELS:-trading-agent-prod}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /home/hariohm/.config/indian-trading-agent:/home/hariohm/.config/indian-trading-agent:ro
+      # The runner only reads these files while composing the production stack.
+      # Host-side bind sources (data and Cloudflare files) stay invisible here.
+      - /home/hariohm/.config/indian-trading-agent/compose.env:/home/hariohm/.config/indian-trading-agent/compose.env:ro
+      - /home/hariohm/.config/indian-trading-agent/prod.env:/home/hariohm/.config/indian-trading-agent/prod.env:ro
       # This file is the host-visible lock shared with manual deploy.sh runs.
       - ${TRADING_AGENT_DEPLOY_LOCK_FILE:-/home/hariohm/.config/indian-trading-agent/deploy.lock}:${TRADING_AGENT_DEPLOY_LOCK_FILE:-/home/hariohm/.config/indian-trading-agent/deploy.lock}:rw
       - indian-trading-agent-runner-config:/opt/actions-runner

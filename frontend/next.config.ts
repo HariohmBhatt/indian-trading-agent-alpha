@@ -3,10 +3,8 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   output: "standalone",
   allowedDevOrigins: [
-    "dellg15",
-    "192.168.29.225",
-    "192.168.29.213",
-    "100.91.136.0",
+    "localhost",
+    "127.0.0.1",
   ],
 };
 

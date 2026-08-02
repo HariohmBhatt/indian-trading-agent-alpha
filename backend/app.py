@@ -4,10 +4,14 @@ import sys
 import os
 
 # Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
 
 from dotenv import load_dotenv
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"), override=True)
+
+# Keep repository .env values as development defaults. Environment variables
+# injected by production Compose must take precedence over the repository file.
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"), override=False)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,19 +38,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+DEV_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-        "http://dellg15:3000",
-        "http://100.91.136.0:3000",
-        "http://192.168.29.225:3000",
-        "http://192.168.29.213:3000",
-    ],
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1|dellg15|100\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+):3000",
+    allow_origins=DEV_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

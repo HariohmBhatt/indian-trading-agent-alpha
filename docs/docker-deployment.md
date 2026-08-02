@@ -10,7 +10,7 @@ self-hosted runner for a fresh host.
 
 The repository has two isolated Docker Compose projects:
 
-- `deploy/docker-compose.dev.yml` — local development at `http://dellg15:3000`
+- `deploy/docker-compose.dev.yml` — local development at `http://localhost:3000`
 - `deploy/docker-compose.prod.yml` — production behind the Cloudflare Tunnel at `https://trade.hariohm.in`
 
 Both projects build the same source with different Docker targets. Development
@@ -147,9 +147,14 @@ socket gives jobs effectively root-level control of the host; it is not
 limited to creating production containers. Only trusted release code may run
 on this runner.
 
+> Residual host-level trust: mounting `/var/run/docker.sock` gives the runner
+> Docker access equivalent to the host's Docker group. Narrow file mounts and
+> trusted workflow triggers reduce exposure, but the raw socket remains a
+> host-control boundary.
+
 ```bash
 cp deploy/runner.env.example deploy/runner.env
-# Replace RUNNER_TOKEN with a fresh token from:
+# Set RUNNER_TOKEN to a fresh token for the first registration from:
 # GitHub repository → Settings → Actions → Runners → New self-hosted runner
 # Update TRADING_AGENT_RUNNER_ENV_FILE if the checkout path differs.
 
@@ -161,11 +166,18 @@ docker compose \
 
 The runner has the `trading-agent-prod` label, which is required by the
 workflow. Its registration and work directories are persistent Docker
-volumes, and it also uses `restart: unless-stopped`. The entrypoint requires a
-non-empty `RUNNER_TOKEN` on every container start, but uses the token for
-registration only when the persistent `.runner` file is absent. If the
-registration volume is deleted, obtain a fresh token; revoke and replace it if
-exposed.
+volumes, and it also uses `restart: unless-stopped`. Once `.runner` exists,
+the runner reconnects without `RUNNER_TOKEN`; the entrypoint removes that
+variable before starting the long-lived runner process.
+
+The runner receives only the `compose.env` and `prod.env` files needed by the
+deployment command. Cloudflare credentials and production data remain
+host-side Docker bind sources rather than being exposed through the runner's
+configuration mount.
+
+The workflow intentionally triggers only on pushes to `prod` and manual
+dispatch. Do not add a `pull_request` trigger to a workflow that runs on this
+self-hosted runner: code from an untrusted pull request must not reach it.
 
 The runner Compose file and workflow use hard-coded `/home/hariohm/...` host
 paths. The current reference host and checkout layout are therefore part of
