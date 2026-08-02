@@ -47,6 +47,7 @@ jobs:
             --no-header \
             --allow-unsafe \
             --generate-hashes \
+            --no-annotate \
             --no-emit-index-url \
             --pip-args="--python-version 3.12" \
             --output-file=requirements.lock \
