@@ -4,6 +4,8 @@
 .env
 .env.local
 .env.*.local
+deploy/compose.env
+deploy/runner.env
 *.key
 *.pem
 credentials.json

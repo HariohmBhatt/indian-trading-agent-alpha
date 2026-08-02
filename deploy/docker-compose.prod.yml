@@ -1,0 +1,51 @@
+name: indian-trading-agent-prod
+
+services:
+  backend:
+    image: ${TRADING_AGENT_PROD_BACKEND_IMAGE:-indian-trading-agent-backend:prod}
+    build:
+      context: ..
+      dockerfile: deploy/docker/backend.Dockerfile
+      target: production
+    env_file:
+      - ${TRADING_AGENT_PROD_ENV_FILE:?Set TRADING_AGENT_PROD_ENV_FILE in the deployment environment}
+    environment:
+      TRADINGAGENTS_HOME: /data
+    volumes:
+      - ${TRADING_AGENT_PROD_DATA_DIR:?Set TRADING_AGENT_PROD_DATA_DIR in the deployment environment}:/data
+    restart: unless-stopped
+    networks:
+      - trading-prod
+
+  frontend:
+    image: ${TRADING_AGENT_PROD_FRONTEND_IMAGE:-indian-trading-agent-frontend:prod}
+    build:
+      context: ..
+      dockerfile: deploy/docker/frontend.Dockerfile
+      target: production
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - trading-prod
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
+    user: "0:0"
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    volumes:
+      - ${CLOUDFLARED_CONFIG_FILE:?Set CLOUDFLARED_CONFIG_FILE in the deployment environment}:/etc/cloudflared/config.yml:ro
+      - ${CLOUDFLARED_CREDENTIALS_FILE:?Set CLOUDFLARED_CREDENTIALS_FILE in the deployment environment}:/etc/cloudflared/credentials.json:ro
+    restart: unless-stopped
+    networks:
+      - trading-prod
+
+networks:
+  trading-prod:
+    name: indian-trading-agent-prod

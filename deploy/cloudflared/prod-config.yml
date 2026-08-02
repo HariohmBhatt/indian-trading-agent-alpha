@@ -1,0 +1,10 @@
+tunnel: 989090d5-dfd5-4b87-b70a-90d6fe96ae6f
+credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  - hostname: trade.hariohm.in
+    path: ^/api(/.*)?$
+    service: http://backend:8000
+  - hostname: trade.hariohm.in
+    service: http://frontend:3000
+  - service: http_status:404

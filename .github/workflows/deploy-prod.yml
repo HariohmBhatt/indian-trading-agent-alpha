@@ -1,0 +1,35 @@
+name: Deploy production
+
+on:
+  push:
+    branches:
+      - prod
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trading-agent-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy on dellg15
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+      - trading-agent-prod
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out the prod commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Deploy Docker production stack
+        env:
+          TRADING_AGENT_COMPOSE_ENV_FILE: /home/hariohm/.config/indian-trading-agent/compose.env
+        run: ./deploy/deploy.sh

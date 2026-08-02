@@ -1,0 +1,24 @@
+name: indian-trading-agent-runner
+
+services:
+  runner:
+    build:
+      context: runner
+    image: indian-trading-agent-github-runner:latest
+    env_file:
+      - ${TRADING_AGENT_RUNNER_ENV_FILE:?Set TRADING_AGENT_RUNNER_ENV_FILE to deploy/runner.env}
+    environment:
+      RUNNER_NAME: ${RUNNER_NAME:-dellg15-prod-runner}
+      RUNNER_LABELS: ${RUNNER_LABELS:-trading-agent-prod}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /home/hariohm/.config/indian-trading-agent:/home/hariohm/.config/indian-trading-agent:ro
+      - indian-trading-agent-runner-config:/opt/actions-runner
+      - indian-trading-agent-runner-work:/home/runner/_work
+    restart: unless-stopped
+
+volumes:
+  indian-trading-agent-runner-config:
+    name: indian-trading-agent-runner-config
+  indian-trading-agent-runner-work:
+    name: indian-trading-agent-runner-work

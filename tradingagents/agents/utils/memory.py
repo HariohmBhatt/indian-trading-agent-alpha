@@ -99,7 +99,11 @@ class FinancialSituationMemory:
         self.entries: list[dict] = []
         self.bm25 = None
 
-        default_dir = os.path.join(os.path.expanduser("~"), ".tradingagents", "memory")
+        tradingagents_home = os.getenv(
+            "TRADINGAGENTS_HOME",
+            os.path.join(os.path.expanduser("~"), ".tradingagents"),
+        )
+        default_dir = os.path.join(tradingagents_home, "memory")
         self.memory_dir = (config or {}).get("memory_dir", default_dir)
         self.persist_path = os.path.join(self.memory_dir, f"{name}.json")
 

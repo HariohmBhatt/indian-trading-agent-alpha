@@ -1,6 +1,9 @@
 import os
 
-_TRADINGAGENTS_HOME = os.path.join(os.path.expanduser("~"), ".tradingagents")
+_TRADINGAGENTS_HOME = os.getenv(
+    "TRADINGAGENTS_HOME",
+    os.path.join(os.path.expanduser("~"), ".tradingagents"),
+)
 
 DEFAULT_CONFIG = {
     "project_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),

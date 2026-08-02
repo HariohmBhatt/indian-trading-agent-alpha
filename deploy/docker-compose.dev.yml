@@ -1,0 +1,58 @@
+name: indian-trading-agent-dev
+
+services:
+  backend:
+    image: indian-trading-agent-backend:dev
+    build:
+      context: ..
+      dockerfile: deploy/docker/backend.Dockerfile
+      target: development
+    env_file:
+      - ${TRADING_AGENT_DEV_ENV_FILE:-../.env}
+    environment:
+      TRADINGAGENTS_HOME: /data
+    volumes:
+      - ../backend:/app/backend
+      - ../cli:/app/cli
+      - ../tradingagents:/app/tradingagents
+      - ../main.py:/app/main.py:ro
+      - indian-trading-agent-dev-data:/data
+    ports:
+      - "${TRADING_AGENT_DEV_BACKEND_PORT:-8000}:8000"
+    restart: "no"
+    networks:
+      - trading-dev
+
+  frontend:
+    image: indian-trading-agent-frontend:dev
+    build:
+      context: ..
+      dockerfile: deploy/docker/frontend.Dockerfile
+      target: development
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      NEXT_TELEMETRY_DISABLED: "1"
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ../frontend:/app/frontend
+      - indian-trading-agent-dev-node-modules:/app/frontend/node_modules
+      - indian-trading-agent-dev-next:/app/frontend/.next
+    ports:
+      - "${TRADING_AGENT_DEV_FRONTEND_PORT:-3000}:3000"
+    restart: "no"
+    networks:
+      - trading-dev
+
+networks:
+  trading-dev:
+    name: indian-trading-agent-dev
+
+volumes:
+  indian-trading-agent-dev-data:
+    name: indian-trading-agent-dev-data
+  indian-trading-agent-dev-node-modules:
+    name: indian-trading-agent-dev-node-modules
+  indian-trading-agent-dev-next:
+    name: indian-trading-agent-dev-next

@@ -6,7 +6,14 @@ import json
 from datetime import datetime
 from contextlib import contextmanager
 
-DB_PATH = os.path.join(os.path.expanduser("~"), ".tradingagents", "trading_agent.db")
+TRADINGAGENTS_HOME = os.getenv(
+    "TRADINGAGENTS_HOME",
+    os.path.join(os.path.expanduser("~"), ".tradingagents"),
+)
+DB_PATH = os.getenv(
+    "TRADINGAGENTS_DB_PATH",
+    os.path.join(TRADINGAGENTS_HOME, "trading_agent.db"),
+)
 
 
 def ensure_db():
