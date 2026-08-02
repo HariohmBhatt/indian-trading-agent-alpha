@@ -50,9 +50,18 @@ reference-host paths for the target host:
 
 ```bash
 mkdir -p ~/.config/indian-trading-agent
+touch ~/.config/indian-trading-agent/deploy.lock
 cp deploy/compose.env.example \
   ~/.config/indian-trading-agent/compose.env
 $EDITOR ~/.config/indian-trading-agent/compose.env
+cp deploy/cloudflared/prod-config.yml \
+  ~/.config/indian-trading-agent/cloudflared-config.yml
+chmod 664 ~/.config/indian-trading-agent/deploy.lock
+chmod 600 ~/.config/indian-trading-agent/prod.env \
+  ~/.config/indian-trading-agent/cloudflared-credentials.json
+chmod 644 ~/.config/indian-trading-agent/compose.env
+sudo chgrp docker ~/.config/indian-trading-agent/prod.env
+sudo chmod 640 ~/.config/indian-trading-agent/prod.env
 ```
 
 Provision the remaining files from their authoritative sources:
@@ -68,31 +77,52 @@ Provision the remaining files from their authoritative sources:
   authorized backup. The repository does not create or restore it.
 
 For the reference host, the environment file should be readable by the
-containerized runner and the secret files should remain restricted:
-
-```bash
-chmod 600 ~/.config/indian-trading-agent/prod.env \
-  ~/.config/indian-trading-agent/cloudflared-credentials.json
-chmod 644 ~/.config/indian-trading-agent/compose.env
-sudo chgrp docker ~/.config/indian-trading-agent/prod.env
-sudo chmod 640 ~/.config/indian-trading-agent/prod.env
-```
+containerized runner and the secret files should remain restricted.
 
 The `docker-compose.runner.yml` bind mount and the workflow currently contain
 absolute `/home/hariohm/...` paths. A different user, home directory, or
 checkout path requires a separately reviewed deployment-file change; copying
 these files alone is not a fresh-host portability mechanism.
 
-Enable Docker before starting containers:
+```bash
+mkdir -p ~/.tradingagents-prod
+rsync -a ~/.tradingagents/ ~/.tradingagents-prod/
+```
+
+Then deploy manually:
+
+```bash
+TRADING_AGENT_EXPECTED_REF=refs/heads/prod \
+TRADING_AGENT_EXPECTED_SHA="$(git rev-parse HEAD)" \
+./deploy/deploy.sh
+```
+
+The deploy script validates that the checked-out commit is on `prod`, checks
+Docker/Compose and every host path referenced by `compose.env`, validates
+`docker compose config`, and holds `deploy.lock` for the complete operation.
+Use `./deploy/deploy.sh --dry-run` with the same two revision variables to run
+all validation without starting or replacing containers.
+
+The Cloudflare Tunnel is a container in the production Compose project. Stop
+the old host `cloudflared` service before starting this stack so only the
+Docker connector is active:
+
+```bash
+sudo systemctl disable --now cloudflared
+./deploy/deploy.sh
+```
+
+The same applies to the old host-based application services:
+
+```bash
+sudo systemctl disable --now trading-agent-backend trading-agent-frontend \
+  trading-agent-prod-backend trading-agent-prod-frontend
+```
+
+Docker itself must be enabled at boot:
 
 ```bash
 sudo systemctl enable --now docker
-```
-
-Then deploy from the repository root:
-
-```bash
-./deploy/deploy.sh
 ```
 
 The production containers use `restart: unless-stopped` after they have been
@@ -155,10 +185,12 @@ git push origin prod
 ```
 
 GitHub Actions checks out that exact commit on `dellg15`, runs
-`./deploy/deploy.sh`, builds the production images locally, replaces the
-containers, and verifies both health endpoints. A failed health check fails
-the workflow and prints recent container logs, so the deployment can be
-diagnosed. Compose does not automatically restore the previous release.
+`./deploy/deploy.sh` with the event's `prod` ref and SHA, builds the production
+images locally, replaces the containers, and verifies both health endpoints.
+Manual and runner deployments share the host-visible `deploy.lock`, so only
+one production replacement can run at a time. A failed health check fails the
+workflow and prints recent container logs, so the deployment can be diagnosed.
+Compose does not automatically restore the previous release.
 
 For rollback, use a forward revert/restore commit on `prod`; do not force-push:
 
